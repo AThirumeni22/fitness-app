@@ -61,13 +61,23 @@ which is: read and write your own rows, never anyone else's.
 - Every table (`profiles`, `custom_exercises`, `templates`, `workouts`) has
   a `user_id` column and a Row Level Security policy that only allows a
   signed-in user to touch rows where `user_id` matches their own id.
-- The built-in exercise library and starter templates (`src/exercises.js`)
-  aren't stored in the database at all — they ship with the app for
-  everyone. Only exercises/templates someone adds themselves, and their
-  finished workouts, are saved to their account.
+- The built-in exercise library (870+ exercises, `public/exercises-data.json`)
+  and starter templates (`src/exercises.js`) aren't stored in the database at
+  all — they ship with the app for everyone. Only exercises/templates someone
+  adds themselves, and their finished workouts, are saved to their account.
 - The workout you're currently in the middle of (not yet finished) is kept
   in that browser's local storage, not the database, so it survives a
   refresh but doesn't follow you to another device until you hit Finish.
+
+## Exercise library
+
+The built-in library (`public/exercises-data.json`) is adapted from the
+[free-exercise-db](https://github.com/yuhonas/free-exercise-db) project, an
+open, public-domain dataset of exercises with names, categories, equipment,
+difficulty level, step-by-step instructions, and two demonstration images per
+exercise. Those two images are what the "how it's performed" animation on
+each exercise's detail screen crossfades between. It's a static file served
+alongside the app (not bundled into the JS) and fetched once at startup.
 
 ## Project structure
 

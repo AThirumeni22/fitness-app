@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient.js";
-import { DEFAULT_EXERCISES, DEFAULT_TEMPLATES, CAT_ORDER } from "./exercises.js";
+import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary } from "./exercises.js";
 import {
   uid, byId, toKg, fromKg, roundDisp,
   fmtDate, fmtShort, fmtDuration, fmtClock, fmtElapsed, escapeHtml
@@ -10,13 +10,14 @@ import * as db from "./db.js";
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
 
-  let profile, customExercises, templates, history;
+  let profile, customExercises, templates, history, library;
   try {
-    [profile, customExercises, templates, history] = await Promise.all([
+    [profile, customExercises, templates, history, library] = await Promise.all([
       db.getProfile(user.id),
       db.listCustomExercises(user.id),
       db.listTemplates(user.id),
-      db.listWorkouts(user.id)
+      db.listWorkouts(user.id),
+      fetchExerciseLibrary()
     ]);
   } catch (err) {
     root.innerHTML = `<div class="boot-loading err">Couldn't load your data: ${escapeHtml(err.message || String(err))}<br><button class="btn btn-secondary" id="retryBtn" style="margin-top:14px;">Retry</button></div>`;
@@ -33,7 +34,7 @@ export async function mountApp(root, user) {
 
   const state = {
     unit: profile.unit === "lb" ? "lb" : "kg",
-    exercises: DEFAULT_EXERCISES.concat(customExercises),
+    exercises: library.concat(customExercises),
     templates: DEFAULT_TEMPLATES.concat(templates),
     history,
     active: activeDraft,
@@ -122,11 +123,16 @@ export async function mountApp(root, user) {
     b.addEventListener("click", () => setTab(b.getAttribute("data-tab")));
   });
 
+  let activeDetailInterval = null;
   function openSheet(html) {
+    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
     document.getElementById("sheetInner").innerHTML = '<div class="sheet-handle"></div>' + html;
     document.getElementById("sheet").hidden = false;
   }
-  function closeSheet() { document.getElementById("sheet").hidden = true; }
+  function closeSheet() {
+    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
+    document.getElementById("sheet").hidden = true;
+  }
 
   let currentTab = "train";
   function setTab(tab) {
@@ -349,20 +355,26 @@ export async function mountApp(root, user) {
   }
 
   function renderPickerSheet(title, onPick) {
-    const byCat = {};
-    CAT_ORDER.forEach((c) => { byCat[c] = []; });
-    state.exercises.forEach((e) => { (byCat[e.cat] = byCat[e.cat] || []).push(e); });
+    let activeCat = null;
+    const MAX_RESULTS = 150;
 
-    function draw(filter) {
-      const q = (filter || "").toLowerCase();
-      let html = "";
-      Object.keys(byCat).forEach((cat) => {
-        const items = byCat[cat].filter((e) => e.name.toLowerCase().indexOf(q) > -1);
-        if (!items.length) return;
-        html += `<div class="pick-cat-label">${escapeHtml(cat)}</div>`;
-        items.forEach((e) => { html += `<div class="pick-row" data-id="${e.id}"><span>${escapeHtml(e.name)}</span></div>`; });
-      });
-      return html;
+    function draw(filterRaw) {
+      const q = (filterRaw || "").trim().toLowerCase();
+      const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
+
+      if (!q && !activeCat) {
+        return `<div class="cat-chip-row">${chips}</div><p class="muted" style="margin-top:14px;">Search by name, or pick a category to browse.</p>`;
+      }
+
+      const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
+      const matches = q ? pool.filter((e) => e.name.toLowerCase().indexOf(q) > -1) : pool;
+      const shown = matches.slice(0, MAX_RESULTS);
+      let rowsHtml = shown.map((e) => `<div class="pick-row" data-id="${e.id}"><span>${escapeHtml(e.name)}</span><span class="pick-eq">${escapeHtml(e.equipment || "")}</span></div>`).join("");
+      if (!shown.length) rowsHtml = `<p class="muted" style="padding:12px 4px;">No matches.</p>`;
+      const moreNote = matches.length > MAX_RESULTS
+        ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
+        : "";
+      return `<div class="cat-chip-row">${chips}</div>${rowsHtml}${moreNote}`;
     }
 
     openSheet(`
@@ -372,13 +384,18 @@ export async function mountApp(root, user) {
     `);
 
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
-    function bindRows() {
+    function bindAll() {
       document.querySelectorAll("#pickerBody .pick-row").forEach((r) => r.addEventListener("click", () => onPick(r.getAttribute("data-id"))));
+      document.querySelectorAll("#pickerBody .cat-chip").forEach((b) => b.addEventListener("click", () => {
+        activeCat = activeCat === b.getAttribute("data-cat") ? null : b.getAttribute("data-cat");
+        document.getElementById("pickerBody").innerHTML = draw(document.getElementById("pickerSearch").value);
+        bindAll();
+      }));
     }
-    bindRows();
+    bindAll();
     document.getElementById("pickerSearch").addEventListener("input", (e) => {
       document.getElementById("pickerBody").innerHTML = draw(e.target.value);
-      bindRows();
+      bindAll();
     });
   }
 
@@ -563,6 +580,17 @@ export async function mountApp(root, user) {
 
   /* ================= EXERCISES ================= */
   let exSearch = "";
+  let exEquipment = null;
+
+  const EQUIPMENT_GROUPS = [
+    { key: "body only", label: "Bodyweight" },
+    { key: "barbell", label: "Barbell" },
+    { key: "dumbbell", label: "Dumbbell" },
+    { key: "cable", label: "Cable" },
+    { key: "machine", label: "Machine" },
+    { key: "kettlebells", label: "Kettlebell" },
+    { key: "bands", label: "Bands" }
+  ];
 
   function bestPr(exId) {
     let best = 0;
@@ -583,21 +611,28 @@ export async function mountApp(root, user) {
     const byCat = {};
     CAT_ORDER.forEach((c) => { byCat[c] = []; });
     state.exercises.forEach((e) => { (byCat[e.cat] = byCat[e.cat] || []).push(e); });
-    const q = exSearch.toLowerCase();
+    const q = exSearch.trim().toLowerCase();
+    const searching = q.length > 0;
 
-    const groupsHtml = Object.keys(byCat).map((cat) => {
-      const items = byCat[cat].filter((e) => e.name.toLowerCase().indexOf(q) > -1);
+    const eqChipsHtml = EQUIPMENT_GROUPS.map((g) => `<button class="cat-chip ${exEquipment === g.key ? "active" : ""}" data-eq="${g.key}">${escapeHtml(g.label)}</button>`).join("");
+
+    const groupsHtml = CAT_ORDER.map((cat) => {
+      let items = byCat[cat] || [];
+      if (exEquipment) items = items.filter((e) => (e.equipment || "other") === exEquipment);
+      if (q) items = items.filter((e) => e.name.toLowerCase().indexOf(q) > -1);
       if (!items.length) return "";
       const rows = items.map((e) => {
         const pr = bestPr(e.id);
         return `
-          <div class="ex-row">
+          <div class="ex-row" data-id="${e.id}">
             <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
-            ${pr > 0 ? `<div class="pr">PR ${roundDisp(fromKg(pr, state.unit))} ${state.unit}</div>` : ""}</div>
-            ${e.isCustom ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
+            <div class="pr">${pr > 0 ? `PR ${roundDisp(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
+            ${e.isCustom
+              ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
+              : `<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`}
           </div>`;
       }).join("");
-      return `<details class="cat-group" open><summary>${escapeHtml(cat)} <span class="count">${items.length}</span></summary>${rows}</details>`;
+      return `<details class="cat-group" ${searching || exEquipment ? "open" : ""}><summary>${escapeHtml(cat)} <span class="count">${items.length}</span></summary>${rows}</details>`;
     }).join("");
 
     el.innerHTML = `
@@ -606,7 +641,8 @@ export async function mountApp(root, user) {
       ${tplHtml}
       <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;"><h2 style="font-size:19px;">Library</h2>
       <button class="btn btn-secondary btn-sm" id="newExBtn">+ Add Custom</button></div>
-      <input type="text" class="search-input" id="exSearchInput" placeholder="Search exercises…" value="${escapeHtml(exSearch)}">
+      <input type="text" class="search-input" id="exSearchInput" placeholder="Search 870+ exercises…" value="${escapeHtml(exSearch)}">
+      <div class="cat-chip-row">${eqChipsHtml}</div>
       ${groupsHtml || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`}
     `;
 
@@ -618,8 +654,13 @@ export async function mountApp(root, user) {
       const inp = document.getElementById("exSearchInput");
       inp.focus(); inp.setSelectionRange(exSearch.length, exSearch.length);
     });
+    el.querySelectorAll(".cat-chip[data-eq]").forEach((b) => b.addEventListener("click", () => {
+      exEquipment = exEquipment === b.getAttribute("data-eq") ? null : b.getAttribute("data-eq");
+      renderExercises();
+    }));
     el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
-    el.querySelectorAll(".del-tpl").forEach((b) => b.addEventListener("click", async () => {
+    el.querySelectorAll(".del-tpl").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
       const id = b.getAttribute("data-id");
       try {
         await db.deleteTemplate(id);
@@ -627,14 +668,51 @@ export async function mountApp(root, user) {
         renderExercises(); toast("Template deleted");
       } catch (err) { toast("Couldn't delete template"); }
     }));
-    el.querySelectorAll(".del-ex").forEach((b) => b.addEventListener("click", async () => {
+    el.querySelectorAll(".del-ex").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
       const id = b.getAttribute("data-id");
       try {
         await db.deleteCustomExercise(id);
-        state.exercises = state.exercises.filter((e) => e.id !== id);
+        state.exercises = state.exercises.filter((e2) => e2.id !== id);
         renderExercises(); toast("Exercise removed");
       } catch (err) { toast("Couldn't delete exercise"); }
     }));
+    el.querySelectorAll(".ex-row").forEach((row) => row.addEventListener("click", () => {
+      openExerciseDetail(byId(state.exercises, row.getAttribute("data-id")));
+    }));
+  }
+
+  function openExerciseDetail(ex) {
+    if (!ex) return;
+    const hasImgs = Array.isArray(ex.images) && ex.images.length >= 2;
+    const instrHtml = (ex.instructions || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+    openSheet(`
+      <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="ex-tags">
+        <span class="ex-tag">${escapeHtml(ex.cat)}</span>
+        ${ex.equipment ? `<span class="ex-tag">${escapeHtml(ex.equipment)}</span>` : ""}
+        ${ex.level ? `<span class="ex-tag">${escapeHtml(ex.level)}</span>` : ""}
+      </div>
+      ${hasImgs ? `
+        <div class="ex-demo">
+          <img class="ex-demo-img on" id="exDemoA" src="${ex.images[0]}" alt="${escapeHtml(ex.name)}, position 1" loading="lazy">
+          <img class="ex-demo-img" id="exDemoB" src="${ex.images[1]}" alt="${escapeHtml(ex.name)}, position 2" loading="lazy">
+        </div>` : ""}
+      ${instrHtml ? `<ol class="ex-instructions">${instrHtml}</ol>` : '<p class="muted">No step-by-step instructions for this one yet.</p>'}
+    `);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    if (hasImgs) {
+      const a = document.getElementById("exDemoA");
+      const b = document.getElementById("exDemoB");
+      a.addEventListener("error", () => { a.style.display = "none"; });
+      b.addEventListener("error", () => { b.style.display = "none"; });
+      let showingA = true;
+      activeDetailInterval = setInterval(() => {
+        showingA = !showingA;
+        a.classList.toggle("on", showingA);
+        b.classList.toggle("on", !showingA);
+      }, 1100);
+    }
   }
 
   function openCustomExerciseForm() {
@@ -665,20 +743,31 @@ export async function mountApp(root, user) {
 
   function openTemplateBuilder() {
     const selected = {};
-    function draw(filter) {
-      const q = (filter || "").toLowerCase();
-      const byCat = {}; CAT_ORDER.forEach((c) => { byCat[c] = []; });
-      state.exercises.forEach((e) => { if (e.name.toLowerCase().indexOf(q) > -1) (byCat[e.cat] = byCat[e.cat] || []).push(e); });
-      let html = "";
-      Object.keys(byCat).forEach((cat) => {
-        if (!byCat[cat].length) return;
-        html += `<div class="pick-cat-label">${cat}</div>`;
-        byCat[cat].forEach((e) => {
-          const on = !!selected[e.id];
-          html += `<div class="pick-row" data-id="${e.id}"><div class="chk ${on ? "on" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></div><span>${escapeHtml(e.name)}</span></div>`;
-        });
-      });
-      return html;
+    let activeCat = null;
+    const MAX_RESULTS = 150;
+
+    function draw(filterRaw) {
+      const q = (filterRaw || "").trim().toLowerCase();
+      const selCount = Object.keys(selected).filter((k) => selected[k]).length;
+      const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
+      const selNote = selCount ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">${selCount} selected</p>` : "";
+
+      if (!q && !activeCat) {
+        return `<div class="cat-chip-row">${chips}</div><p class="muted" style="margin-top:14px;">Search by name, or pick a category to browse.</p>${selNote}`;
+      }
+
+      const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
+      const matches = q ? pool.filter((e) => e.name.toLowerCase().indexOf(q) > -1) : pool;
+      const shown = matches.slice(0, MAX_RESULTS);
+      let rowsHtml = shown.map((e) => {
+        const on = !!selected[e.id];
+        return `<div class="pick-row" data-id="${e.id}"><div class="chk ${on ? "on" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></div><span>${escapeHtml(e.name)}</span></div>`;
+      }).join("");
+      if (!shown.length) rowsHtml = `<p class="muted" style="padding:12px 4px;">No matches.</p>`;
+      const moreNote = matches.length > MAX_RESULTS
+        ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
+        : "";
+      return `<div class="cat-chip-row">${chips}</div>${rowsHtml}${moreNote || selNote}`;
     }
     openSheet(`
       <div class="sheet-title"><h3>New Template</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -693,6 +782,11 @@ export async function mountApp(root, user) {
         const id = r.getAttribute("data-id");
         selected[id] = !selected[id];
         r.querySelector(".chk").classList.toggle("on", !!selected[id]);
+      }));
+      document.querySelectorAll("#tplPicker .cat-chip").forEach((b) => b.addEventListener("click", () => {
+        activeCat = activeCat === b.getAttribute("data-cat") ? null : b.getAttribute("data-cat");
+        document.getElementById("tplPicker").innerHTML = draw(document.getElementById("tplSearch").value);
+        bindRows();
       }));
     }
     bindRows();
