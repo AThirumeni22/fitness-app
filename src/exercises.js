@@ -28,6 +28,7 @@ export const DEFAULT_TEMPLATES = [
       "Cable_Incline_Triceps_Extension",
       "Side_Lateral_Raise"
     ],
+    targets: {},
     isCustom: false
   },
   {
@@ -40,6 +41,7 @@ export const DEFAULT_TEMPLATES = [
       "Barbell_Curl",
       "Seated_Cable_Rows"
     ],
+    targets: {},
     isCustom: false
   },
   {
@@ -52,6 +54,7 @@ export const DEFAULT_TEMPLATES = [
       "Seated_Calf_Raise",
       "Dumbbell_Lunges"
     ],
+    targets: {},
     isCustom: false
   }
 ];

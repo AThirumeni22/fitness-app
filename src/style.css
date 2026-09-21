@@ -263,5 +263,27 @@ details.cat-group summary .count{font-family:"IBM Plex Mono",monospace; color:va
 .auth-foot{text-align:center; font-size:13px; color:var(--ink-dim); margin:16px 0 0;}
 .link-btn{background:none; border:none; color:var(--accent); font-weight:600; cursor:pointer; padding:0; font-size:13px;}
 .link-btn:active{opacity:.7;}
+.link-btn:disabled{cursor:default;}
+
+/* ---------- calendar (structural only -- palette/polish still to come) ---------- */
+.cal-dow-row{display:grid; grid-template-columns:repeat(7,1fr); text-align:center; font-size:11px; color:var(--ink-faint); padding:6px 2px;}
+.cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px;}
+.cal-cell{aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; border:1px solid var(--border); background:var(--surface); border-radius:var(--r-s); cursor:pointer; padding:2px;}
+.cal-cell.empty{border:none; background:none; cursor:default;}
+.cal-cell.today{border-color:var(--accent); border-width:2px;}
+.cal-daynum{font-size:12px;}
+.cal-dots{display:flex; align-items:center; gap:2px; min-height:8px;}
+.cal-dot{width:6px; height:6px; border-radius:50%; background:var(--accent);}
+.cal-dot.friend{background:var(--steel);}
+.cal-cam{font-size:8px; color:var(--ink-faint);}
+
+.media-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:10px;}
+.media-tile{position:relative; aspect-ratio:1; border-radius:var(--r-m); overflow:hidden; background:var(--surface-2);}
+.media-tile img, .media-tile video{width:100%; height:100%; object-fit:cover;}
+.media-who{position:absolute; left:6px; bottom:6px; background:rgba(0,0,0,.55); color:#fff; font-size:10.5px; padding:2px 7px; border-radius:999px;}
+
+.vote-option{display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-s); padding:10px 12px; font-size:13px; cursor:pointer;}
+.vote-option.mine{background:var(--accent-soft); border-color:var(--accent);}
+.vote-count{font-size:11px; color:var(--ink-faint); flex-shrink:0;}
 
 @media (prefers-reduced-motion: reduce){ *{transition:none !important; animation:none !important;} }

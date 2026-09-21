@@ -18,6 +18,13 @@ no server to run yourself.
    contents of [`supabase/schema.sql`](./supabase/schema.sql), and click
    **Run**. This creates the tables and locks each one down so users can
    only ever read or write their own rows.
+2b. Run a second query with the contents of
+   [`supabase/migration_2_social.sql`](./supabase/migration_2_social.sql).
+   This adds everything for Friends, the Calendar, gym-time polls, and the
+   guided template player: friend requests, letting friends see each
+   other's workouts, a day-by-day photo/video feed, and two public storage
+   buckets (`avatars`, `day-media`) it creates for you. Run it once, after
+   schema.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -69,6 +76,40 @@ which is: read and write your own rows, never anyone else's.
   in that browser's local storage, not the database, so it survives a
   refresh but doesn't follow you to another device until you hit Finish.
 
+## Social features
+
+- **Friends** — add someone by the email they signed up with (Friends tab).
+  They get a pending request and accept it from their own Friends tab; from
+  then on you can each see the other's workouts, calendar days, and any
+  gym-time polls the other creates.
+- **Calendar** — a monthly grid of your + your friends' training days (a
+  dot for you, a different dot for a friend, a camera glyph for a day with
+  photos/videos). Tap a day to see who trained and what they hit, plus a
+  BeReal-style feed of that day's photos/videos with an upload button.
+  Friend visibility relies entirely on Row Level Security — the client
+  never decides who can see what.
+- **Plan a session** — at the bottom of the Calendar tab: propose one or
+  more time options, friends vote for as many as work for them, and the
+  option with the most votes is your answer for "when's everyone free."
+- **Profile** — tap the small circle in the top bar to set the name and
+  photo your friends see you as (stored avatar in the `avatars` bucket).
+- **Guided template player** — from the Exercises tab, the ▶ icon on a
+  template runs it set-by-set: hit Play, then the checkmark when you're
+  done with a weight/reps you can adjust on the spot; it tells you if
+  that's a new PR or below your last best, then starts your rest timer
+  automatically. The pencil icon opens the template editor, where you can
+  reorder exercises, add/remove them, and set a target sets/reps/weight
+  per exercise for the player to use.
+- **Rest timer** — the duration you pick in the Timer sheet (a preset or a
+  custom number of seconds) is remembered and reused the next time a set
+  auto-starts the timer, instead of a fixed 90 seconds.
+
+One current limitation worth knowing: a friend's own custom exercises
+(ones they added themselves, not from the built-in library) show up in
+their workout history with just a name, not a category, since categories
+for custom exercises aren't shared across accounts — everything from the
+870+ built-in library works normally either way.
+
 ## Exercise library
 
 The built-in library (`public/exercises-data.json`) is adapted from the
@@ -86,7 +127,11 @@ index.html            Entry HTML
 src/
   main.js             Boots the app: shows the auth screen or the app
   auth.js             Sign in / sign up screen
-  app.js              Main app UI (Train / History / Exercises tabs)
+  app.js              Main app UI (Train / History / Exercises tabs, guided player)
+  friends.js          Friends tab (requests, add by email)
+  calendar.js         Calendar tab (visits, day photos/videos, gym-time polls)
+  profile.js          Profile sheet (name + avatar)
+  player.js           Template editor (targets, reorder) used by app.js's player
   db.js               All Supabase reads/writes
   supabaseClient.js   Supabase client setup
   exercises.js        Built-in exercise library + starter templates
@@ -94,7 +139,8 @@ src/
   utils.js            Formatting/unit-conversion helpers
   style.css           All styling
 supabase/
-  schema.sql          Database schema + Row Level Security policies
+  schema.sql             Base schema + Row Level Security policies
+  migration_2_social.sql Friends, calendar/day-posts, gym-time polls, storage buckets
 ```
 
 ## Local development notes

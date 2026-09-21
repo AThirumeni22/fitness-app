@@ -6,6 +6,10 @@ import {
 } from "./utils.js";
 import { drawChart } from "./chart.js";
 import * as db from "./db.js";
+import { renderFriends } from "./friends.js";
+import { renderCalendar } from "./calendar.js";
+import { openProfileSheet } from "./profile.js";
+import { openTemplateEditor } from "./player.js";
 
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
@@ -32,14 +36,36 @@ export async function mountApp(root, user) {
     if (raw) activeDraft = JSON.parse(raw);
   } catch (e) { activeDraft = null; }
 
+  const REST_KEY = `trainlog.restDuration.${user.id}`;
+  let savedRestDuration = 90;
+  try {
+    const v = parseInt(localStorage.getItem(REST_KEY), 10);
+    if (v > 0) savedRestDuration = v;
+  } catch (e) {}
+
   const state = {
     unit: profile.unit === "lb" ? "lb" : "kg",
     exercises: library.concat(customExercises),
     templates: DEFAULT_TEMPLATES.concat(templates),
     history,
     active: activeDraft,
-    timer: null
+    timer: null,
+    restDuration: savedRestDuration,
+    profile: { displayName: profile.display_name || "", avatarUrl: profile.avatar_url || "" },
+    friends: null
   };
+
+  function saveRestDuration(sec) {
+    state.restDuration = sec;
+    try { localStorage.setItem(REST_KEY, String(sec)); } catch (e) {}
+  }
+
+  // Shared context handed to the friends/calendar/profile/player modules —
+  // assigned once every function below exists (see bottom of mountApp).
+  // Referencing `ctx` inside a listener attached before that point is safe:
+  // the listener only reads it when it actually fires, well after this
+  // synchronous setup has finished and `ctx` has been assigned.
+  let ctx;
 
   function saveActiveDraft() {
     try {
@@ -60,6 +86,16 @@ export async function mountApp(root, user) {
     toast._h = setTimeout(() => { t.hidden = true; }, 2200);
   }
 
+  function avatarHtml() {
+    if (state.profile.avatarUrl) return `<img src="${state.profile.avatarUrl}" style="width:100%; height:100%; object-fit:cover;">`;
+    const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
+    return escapeHtml(initial);
+  }
+  function refreshTopbar() {
+    const a = document.getElementById("topbarAvatar");
+    if (a) a.innerHTML = avatarHtml();
+  }
+
   root.innerHTML = `
     <div class="app">
       <header class="topbar">
@@ -73,6 +109,9 @@ export async function mountApp(root, user) {
             Timer
           </button>
           <button class="chip-btn" id="unitBtn" title="Toggle weight unit">${state.unit}</button>
+          <button class="chip-btn" id="profileBtn" title="Your profile">
+            <span id="topbarAvatar" style="width:18px; height:18px; border-radius:50%; overflow:hidden; display:inline-flex; align-items:center; justify-content:center; background:var(--accent-soft); font-size:10px; font-weight:700;">${avatarHtml()}</span>
+          </button>
           <button class="chip-btn" id="signOutBtn" title="Sign out">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
           </button>
@@ -83,6 +122,8 @@ export async function mountApp(root, user) {
         <section id="tab-train" class="tab"></section>
         <section id="tab-history" class="tab" hidden></section>
         <section id="tab-exercises" class="tab" hidden></section>
+        <section id="tab-friends" class="tab" hidden></section>
+        <section id="tab-calendar" class="tab" hidden></section>
       </main>
 
       <div class="rest-banner" id="restBanner" hidden></div>
@@ -99,6 +140,14 @@ export async function mountApp(root, user) {
         <button data-tab="exercises">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
           <span>Exercises</span>
+        </button>
+        <button data-tab="friends">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          <span>Friends</span>
+        </button>
+        <button data-tab="calendar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <span>Calendar</span>
         </button>
       </nav>
 
@@ -119,6 +168,7 @@ export async function mountApp(root, user) {
   document.getElementById("signOutBtn").addEventListener("click", async () => {
     await supabase.auth.signOut();
   });
+  document.getElementById("profileBtn").addEventListener("click", () => openProfileSheet(ctx));
   document.querySelectorAll(".tabbar button").forEach((b) => {
     b.addEventListener("click", () => setTab(b.getAttribute("data-tab")));
   });
@@ -137,7 +187,7 @@ export async function mountApp(root, user) {
   let currentTab = "train";
   function setTab(tab) {
     currentTab = tab;
-    ["train", "history", "exercises"].forEach((t) => { document.getElementById("tab-" + t).hidden = (t !== tab); });
+    ["train", "history", "exercises", "friends", "calendar"].forEach((t) => { document.getElementById("tab-" + t).hidden = (t !== tab); });
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("active", b.getAttribute("data-tab") === tab));
     renderCurrentTab();
   }
@@ -145,20 +195,41 @@ export async function mountApp(root, user) {
     if (currentTab === "train") renderTrain();
     else if (currentTab === "history") renderHistory();
     else if (currentTab === "exercises") renderExercises();
+    else if (currentTab === "friends") renderFriends(ctx);
+    else if (currentTab === "calendar") renderCalendar(ctx);
     renderRestBanner();
   }
 
   /* ================= TRAIN ================= */
-  function startWorkout(templateId) {
+  let playerArmed = false;
+  let manualPtr = null;
+
+  function startWorkout(templateId, guided) {
     let exList = [];
     if (templateId) {
       const t = byId(state.templates, templateId);
-      if (t) exList = t.exerciseIds.map((id) => ({ exerciseId: id, sets: [{ kg: null, reps: null, done: false }] }));
+      if (t) {
+        if (guided) {
+          exList = t.exerciseIds.map((id) => {
+            const tg = (t.targets && t.targets[id]) || {};
+            const n = tg.sets || 3;
+            return {
+              exerciseId: id,
+              target: { sets: n, reps: tg.reps || null, weight: tg.weight || null },
+              sets: Array.from({ length: n }, () => ({ kg: null, reps: null, done: false }))
+            };
+          });
+        } else {
+          exList = t.exerciseIds.map((id) => ({ exerciseId: id, sets: [{ kg: null, reps: null, done: false }] }));
+        }
+      }
     }
-    state.active = { startedAt: Date.now(), exercises: exList };
+    playerArmed = false;
+    manualPtr = null;
+    state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided };
     saveActiveDraft();
     renderTrain();
-    toast(templateId ? "Workout started" : "Empty workout started");
+    toast(templateId ? (guided ? "Guided workout started" : "Workout started") : "Empty workout started");
   }
 
   async function finishWorkout() {
@@ -175,6 +246,7 @@ export async function mountApp(root, user) {
     if (cleanEx.length === 0) {
       state.active = null;
       state.timer = null;
+      playerArmed = false; manualPtr = null;
       saveActiveDraft();
       renderTrain();
       renderRestBanner();
@@ -195,6 +267,7 @@ export async function mountApp(root, user) {
       state.history.unshift({ id: uid(), ...workout });
       state.active = null;
       state.timer = null;
+      playerArmed = false; manualPtr = null;
       saveActiveDraft();
       renderTrain();
       renderRestBanner();
@@ -208,15 +281,148 @@ export async function mountApp(root, user) {
   function discardWorkout() {
     state.active = null;
     state.timer = null;
+    playerArmed = false; manualPtr = null;
     saveActiveDraft();
     renderTrain();
     renderRestBanner();
     toast("Workout discarded");
   }
 
+  function currentPointer(a) {
+    for (let exi = 0; exi < a.exercises.length; exi++) {
+      const sets = a.exercises[exi].sets;
+      for (let si = 0; si < sets.length; si++) {
+        if (!sets[si].done) return { exi, si };
+      }
+    }
+    return null;
+  }
+
+  function jumpToExercise(a, exi) {
+    const sets = a.exercises[exi].sets;
+    let si = sets.findIndex((s) => !s.done);
+    if (si === -1) si = 0;
+    manualPtr = { exi, si };
+    playerArmed = false;
+    renderTrain();
+  }
+
+  function renderGuidedPlayer(el, a) {
+    const ptr = (manualPtr && a.exercises[manualPtr.exi]) ? manualPtr : currentPointer(a);
+    const totalSets = a.exercises.reduce((n, ex) => n + ex.sets.length, 0);
+    const doneSets = a.exercises.reduce((n, ex) => n + ex.sets.filter((s) => s.done).length, 0);
+    const headHtml = `
+      <div class="active-head">
+        <div><div class="elapsed-label">In progress · Guided</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
+        <div class="head-actions">
+          <button class="icon-btn" id="discardBtn" title="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
+          <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
+        </div>
+      </div>
+      <div id="discardConfirm"></div>`;
+
+    if (!ptr) {
+      el.innerHTML = headHtml + `
+        <div class="card" style="text-align:center;">
+          <h2 style="font-size:20px; margin-bottom:8px;">All sets done 💪</h2>
+          <p class="muted" style="margin-bottom:14px;">${doneSets} of ${totalSets} sets logged.</p>
+        </div>`;
+      bindGuidedHead(a);
+      return;
+    }
+
+    const ex = a.exercises[ptr.exi];
+    const set = ex.sets[ptr.si];
+    const target = ex.target || {};
+    const prevBest = bestPr(ex.exerciseId);
+    const lastSet = ptr.si > 0 ? ex.sets[ptr.si - 1] : null;
+    const defaultW = set.kg != null ? roundDisp(fromKg(set.kg, state.unit))
+      : lastSet && lastSet.kg != null ? roundDisp(fromKg(lastSet.kg, state.unit))
+      : target.weight != null ? target.weight
+      : prevBest ? roundDisp(fromKg(prevBest, state.unit)) : "";
+    const defaultReps = set.reps != null ? set.reps
+      : lastSet && lastSet.reps != null ? lastSet.reps
+      : target.reps != null ? target.reps : "";
+
+    el.innerHTML = headHtml + `
+      <p class="muted" style="text-align:center; margin:0;">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
+      <div class="card" style="text-align:center;">
+        <h2 style="font-size:20px; margin-bottom:4px;">${escapeHtml(exName(ex.exerciseId))}</h2>
+        <p class="muted" style="margin-bottom:18px;">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${target.weight}${state.unit}` : ""}</p>
+        ${!playerArmed ? `
+          <button class="btn btn-primary btn-block" id="playSetBtn" style="padding:22px; font-size:18px;">▶ Start Set</button>
+          <button class="btn btn-ghost" id="skipSetBtn" style="margin-top:10px;">Skip this set</button>
+        ` : `
+          <div style="display:flex; gap:10px; margin-bottom:14px;">
+            <div class="field" style="flex:1; margin:0;"><label>Weight (${state.unit})</label><input type="number" inputmode="decimal" id="playerWeightInput" value="${defaultW}"></div>
+            <div class="field" style="flex:1; margin:0;"><label>Reps</label><input type="number" inputmode="numeric" id="playerRepsInput" value="${defaultReps}"></div>
+          </div>
+          <button class="btn btn-primary btn-block" id="completeSetBtn" style="padding:16px;">✓ Mark Set Done</button>
+        `}
+      </div>
+      <div style="display:flex; justify-content:center; gap:20px;">
+        <button class="link-btn" id="prevExBtn"${ptr.exi === 0 ? ' disabled style="opacity:.4;"' : ""}>← Prev exercise</button>
+        <button class="link-btn" id="nextExBtn"${ptr.exi === a.exercises.length - 1 ? ' disabled style="opacity:.4;"' : ""}>Next exercise →</button>
+      </div>`;
+
+    bindGuidedHead(a);
+
+    if (!playerArmed) {
+      document.getElementById("playSetBtn").addEventListener("click", () => { playerArmed = true; renderTrain(); });
+      document.getElementById("skipSetBtn").addEventListener("click", () => {
+        set.done = true;
+        manualPtr = null;
+        saveActiveDraft();
+        renderTrain();
+      });
+    } else {
+      document.getElementById("completeSetBtn").addEventListener("click", () => {
+        const w = parseFloat(document.getElementById("playerWeightInput").value);
+        const r = parseInt(document.getElementById("playerRepsInput").value, 10);
+        if (isNaN(w) || isNaN(r)) { toast("Enter both weight and reps"); return; }
+        const kg = toKg(w, state.unit);
+        set.kg = kg; set.reps = r; set.done = true;
+        manualPtr = null;
+        saveActiveDraft();
+        if (prevBest && kg > prevBest) toast(`🎉 New PR — ${roundDisp(w)} ${state.unit}!`);
+        else if (prevBest && kg < prevBest) toast(`Logged — your best is ${roundDisp(fromKg(prevBest, state.unit))} ${state.unit}`);
+        else toast("Set logged");
+        startRestTimer(state.restDuration);
+        playerArmed = false;
+        renderTrain();
+      });
+    }
+
+    const prevBtn = document.getElementById("prevExBtn");
+    const nextBtn = document.getElementById("nextExBtn");
+    if (prevBtn) prevBtn.addEventListener("click", () => { if (ptr.exi > 0) jumpToExercise(a, ptr.exi - 1); });
+    if (nextBtn) nextBtn.addEventListener("click", () => { if (ptr.exi < a.exercises.length - 1) jumpToExercise(a, ptr.exi + 1); });
+  }
+
+  function bindGuidedHead(a) {
+    function tickElapsed() {
+      const sec = (Date.now() - a.startedAt) / 1000;
+      const el2 = document.getElementById("activeElapsed");
+      if (el2) el2.textContent = fmtElapsed(sec);
+    }
+    tickElapsed();
+    if (elapsedTimerHandle) clearInterval(elapsedTimerHandle);
+    elapsedTimerHandle = setInterval(tickElapsed, 1000);
+    document.getElementById("finishBtn").addEventListener("click", finishWorkout);
+    document.getElementById("discardBtn").addEventListener("click", () => {
+      document.getElementById("discardConfirm").innerHTML = `
+        <div class="confirm-row"><span>Discard this workout?</span><span class="spacer"></span>
+        <button class="btn btn-danger btn-sm" id="confirmDiscard">Discard</button>
+        <button class="btn btn-secondary btn-sm" id="cancelDiscard">Cancel</button></div>`;
+      document.getElementById("confirmDiscard").addEventListener("click", discardWorkout);
+      document.getElementById("cancelDiscard").addEventListener("click", () => { document.getElementById("discardConfirm").innerHTML = ""; });
+    });
+  }
+
   let elapsedTimerHandle = null;
   function renderTrain() {
     const el = document.getElementById("tab-train");
+    if (state.active && state.active.guided) { renderGuidedPlayer(el, state.active); return; }
     if (!state.active) {
       const tplHtml = state.templates.length ? state.templates.map((t) => `
         <div class="tpl-card">
@@ -332,7 +538,7 @@ export async function mountApp(root, user) {
       s.done = !s.done;
       saveActiveDraft();
       btn.classList.toggle("on", s.done);
-      if (s.done) startRestTimer(90);
+      if (s.done) startRestTimer(state.restDuration);
     }));
     el.querySelectorAll(".set-del").forEach((btn) => btn.addEventListener("click", () => {
       const row = btn.closest(".set-row");
@@ -468,22 +674,36 @@ export async function mountApp(root, user) {
 
   document.getElementById("timerQuickBtn").addEventListener("click", () => {
     if (state.timer) return;
+    const presets = [30, 60, 90, 120];
     openSheet(`
       <div class="sheet-title"><h3>Rest Timer</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <p class="muted" style="margin-bottom:10px;">This is also what auto-starts when you mark a set done.</p>
       <div class="preset-row">
-        <button data-s="30">30s</button><button data-s="60">60s</button>
-        <button data-s="90" class="active">90s</button><button data-s="120">120s</button>
+        ${presets.map((s) => `<button data-s="${s}" class="${s === state.restDuration ? "active" : ""}">${s}s</button>`).join("")}
       </div>
+      <div class="field"><label>Or a custom length (seconds)</label><input type="number" id="customTimerInput" placeholder="e.g. 75" value="${presets.includes(state.restDuration) ? "" : state.restDuration}"></div>
       <button class="btn btn-primary btn-block" id="startTimerBtn">Start</button>
     `);
-    let chosen = 90;
+    let chosen = state.restDuration;
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     document.querySelectorAll(".preset-row button").forEach((b) => b.addEventListener("click", () => {
       chosen = parseInt(b.getAttribute("data-s"), 10);
       document.querySelectorAll(".preset-row button").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
+      document.getElementById("customTimerInput").value = "";
     }));
-    document.getElementById("startTimerBtn").addEventListener("click", () => { startRestTimer(chosen); closeSheet(); });
+    document.getElementById("customTimerInput").addEventListener("input", (e) => {
+      const v = parseInt(e.target.value, 10);
+      if (v > 0) {
+        chosen = v;
+        document.querySelectorAll(".preset-row button").forEach((x) => x.classList.remove("active"));
+      }
+    });
+    document.getElementById("startTimerBtn").addEventListener("click", () => {
+      saveRestDuration(chosen);
+      startRestTimer(chosen);
+      closeSheet();
+    });
   });
 
   /* ================= HISTORY ================= */
@@ -602,8 +822,10 @@ export async function mountApp(root, user) {
     const el = document.getElementById("tab-exercises");
 
     const tplHtml = state.templates.length ? state.templates.map((t) => `
-      <div class="tpl-list-card">
+      <div class="tpl-list-card" style="flex-wrap:wrap;">
         <div class="info"><h4>${escapeHtml(t.name)}</h4><p>${escapeHtml(t.exerciseIds.map(exName).join(", "))}</p></div>
+        <button class="icon-btn run-tpl" data-id="${t.id}" title="Run guided"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg></button>
+        <button class="icon-btn edit-tpl" data-id="${t.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
         <button class="btn btn-secondary btn-sm start-tpl2" data-id="${t.id}">Start</button>
         ${t.isCustom ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
       </div>`).join('<div style="height:8px"></div>') : '<p class="muted">No templates yet.</p>';
@@ -646,7 +868,7 @@ export async function mountApp(root, user) {
       ${groupsHtml || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`}
     `;
 
-    document.getElementById("newTplBtn").addEventListener("click", openTemplateBuilder);
+    document.getElementById("newTplBtn").addEventListener("click", () => openTemplateEditor(ctx, null));
     document.getElementById("newExBtn").addEventListener("click", openCustomExerciseForm);
     document.getElementById("exSearchInput").addEventListener("input", (e) => {
       exSearch = e.target.value;
@@ -659,6 +881,8 @@ export async function mountApp(root, user) {
       renderExercises();
     }));
     el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
+    el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id"), true); setTab("train"); }));
+    el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".del-tpl").forEach((b) => b.addEventListener("click", async (e) => {
       e.stopPropagation();
       const id = b.getAttribute("data-id");
@@ -741,76 +965,16 @@ export async function mountApp(root, user) {
     });
   }
 
-  function openTemplateBuilder() {
-    const selected = {};
-    let activeCat = null;
-    const MAX_RESULTS = 150;
-
-    function draw(filterRaw) {
-      const q = (filterRaw || "").trim().toLowerCase();
-      const selCount = Object.keys(selected).filter((k) => selected[k]).length;
-      const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
-      const selNote = selCount ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">${selCount} selected</p>` : "";
-
-      if (!q && !activeCat) {
-        return `<div class="cat-chip-row">${chips}</div><p class="muted" style="margin-top:14px;">Search by name, or pick a category to browse.</p>${selNote}`;
-      }
-
-      const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
-      const matches = q ? pool.filter((e) => e.name.toLowerCase().indexOf(q) > -1) : pool;
-      const shown = matches.slice(0, MAX_RESULTS);
-      let rowsHtml = shown.map((e) => {
-        const on = !!selected[e.id];
-        return `<div class="pick-row" data-id="${e.id}"><div class="chk ${on ? "on" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></div><span>${escapeHtml(e.name)}</span></div>`;
-      }).join("");
-      if (!shown.length) rowsHtml = `<p class="muted" style="padding:12px 4px;">No matches.</p>`;
-      const moreNote = matches.length > MAX_RESULTS
-        ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
-        : "";
-      return `<div class="cat-chip-row">${chips}</div>${rowsHtml}${moreNote || selNote}`;
-    }
-    openSheet(`
-      <div class="sheet-title"><h3>New Template</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="field"><label>Name</label><input type="text" id="tplName" placeholder="e.g. Upper Body A"></div>
-      <div class="field"><input type="text" id="tplSearch" placeholder="Search exercises to add…"></div>
-      <div id="tplPicker">${draw("")}</div>
-      <button class="btn btn-primary btn-block" id="saveTplBtn" style="margin-top:10px;">Save Template</button>
-    `);
-    document.getElementById("sheetClose").addEventListener("click", closeSheet);
-    function bindRows() {
-      document.querySelectorAll("#tplPicker .pick-row").forEach((r) => r.addEventListener("click", () => {
-        const id = r.getAttribute("data-id");
-        selected[id] = !selected[id];
-        r.querySelector(".chk").classList.toggle("on", !!selected[id]);
-      }));
-      document.querySelectorAll("#tplPicker .cat-chip").forEach((b) => b.addEventListener("click", () => {
-        activeCat = activeCat === b.getAttribute("data-cat") ? null : b.getAttribute("data-cat");
-        document.getElementById("tplPicker").innerHTML = draw(document.getElementById("tplSearch").value);
-        bindRows();
-      }));
-    }
-    bindRows();
-    document.getElementById("tplSearch").addEventListener("input", (e) => {
-      document.getElementById("tplPicker").innerHTML = draw(e.target.value);
-      bindRows();
-    });
-    document.getElementById("saveTplBtn").addEventListener("click", async () => {
-      const name = document.getElementById("tplName").value.trim();
-      const ids = Object.keys(selected).filter((k) => selected[k]);
-      if (!name) { toast("Enter a template name"); return; }
-      if (!ids.length) { toast("Pick at least one exercise"); return; }
-      const saveBtn = document.getElementById("saveTplBtn");
-      saveBtn.disabled = true; saveBtn.textContent = "Saving…";
-      try {
-        const created = await db.addTemplate(user.id, name, ids);
-        state.templates.push(created);
-        closeSheet(); renderExercises(); toast("Template saved");
-      } catch (err) {
-        toast("Couldn't save template");
-        saveBtn.disabled = false; saveBtn.textContent = "Save Template";
-      }
-    });
-  }
+  /* ---------- shared ctx for friends/calendar/profile/player modules ---------- */
+  ctx = {
+    user, supabase, db, state,
+    toast, openSheet, closeSheet, escapeHtml, uid, byId,
+    fmtDate, fmtShort, fmtDuration, roundDisp, fromKg, toKg,
+    exName, exCat,
+    setTab, renderCurrentTab,
+    openExercisePicker: renderPickerSheet,
+    refreshTopbar
+  };
 
   /* ---------- init ---------- */
   const d = new Date();
