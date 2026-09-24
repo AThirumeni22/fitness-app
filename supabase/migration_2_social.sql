@@ -41,6 +41,13 @@ create table if not exists friendships (
 
 alter table friendships enable row level security;
 
+-- Supabase now requires an explicit grant for the Data API to reach a new
+-- table at all (separate from, and in addition to, the RLS policies below
+-- which decide which rows). Without this, every request gets a plain
+-- "permission denied" no matter what the policies say.
+grant select, insert, update, delete on public.friendships to authenticated;
+grant select, insert, update, delete on public.friendships to service_role;
+
 create policy "friendships: read rows you're part of"
   on friendships for select
   using (auth.uid() = user_id or auth.uid() = friend_id);
@@ -123,6 +130,9 @@ create table if not exists day_posts (
 
 alter table day_posts enable row level security;
 
+grant select, insert, delete on public.day_posts to authenticated;
+grant select, insert, delete on public.day_posts to service_role;
+
 create policy "day_posts: read own"
   on day_posts for select
   using (auth.uid() = user_id);
@@ -166,6 +176,13 @@ create table if not exists gym_plan_votes (
 alter table gym_plans enable row level security;
 alter table gym_plan_options enable row level security;
 alter table gym_plan_votes enable row level security;
+
+grant select, insert, delete on public.gym_plans to authenticated;
+grant select, insert, delete on public.gym_plans to service_role;
+grant select, insert, delete on public.gym_plan_options to authenticated;
+grant select, insert, delete on public.gym_plan_options to service_role;
+grant select, insert, delete on public.gym_plan_votes to authenticated;
+grant select, insert, delete on public.gym_plan_votes to service_role;
 
 create policy "gym_plans: visible to creator and friends"
   on gym_plans for select
