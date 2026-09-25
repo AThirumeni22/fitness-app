@@ -9,9 +9,9 @@ export function openProfileSheet(ctx) {
     const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
     openSheet(`
       <div class="sheet-title"><h3>Your Profile</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:18px;">
-        <div id="avatarPreviewWrap" style="width:88px; height:88px; border-radius:50%; overflow:hidden; background:var(--surface-2); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:32px; font-weight:600; color:var(--ink-faint);">
-          ${previewUrl ? `<img id="avatarPreviewImg" src="${previewUrl}" style="width:100%; height:100%; object-fit:cover;">` : escapeHtml(initial)}
+      <div class="avatar-wrap">
+        <div id="avatarPreviewWrap" class="avatar-lg">
+          ${previewUrl ? `<img id="avatarPreviewImg" src="${previewUrl}">` : escapeHtml(initial)}
         </div>
         <input type="file" id="avatarInput" accept="image/*" hidden>
         <button class="btn btn-secondary btn-sm" id="pickAvatarBtn">Change photo</button>
