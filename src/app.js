@@ -87,7 +87,7 @@ export async function mountApp(root, user) {
   }
 
   function avatarHtml() {
-    if (state.profile.avatarUrl) return `<img src="${state.profile.avatarUrl}" style="width:100%; height:100%; object-fit:cover;">`;
+    if (state.profile.avatarUrl) return `<img src="${state.profile.avatarUrl}">`;
     const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
     return escapeHtml(initial);
   }
@@ -110,7 +110,7 @@ export async function mountApp(root, user) {
           </button>
           <button class="chip-btn" id="unitBtn" title="Toggle weight unit">${state.unit}</button>
           <button class="chip-btn" id="profileBtn" title="Your profile">
-            <span id="topbarAvatar" style="width:18px; height:18px; border-radius:50%; overflow:hidden; display:inline-flex; align-items:center; justify-content:center; background:var(--accent-soft); font-size:10px; font-weight:700;">${avatarHtml()}</span>
+            <span id="topbarAvatar" class="avatar-sm">${avatarHtml()}</span>
           </button>
           <button class="chip-btn" id="signOutBtn" title="Sign out">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
@@ -323,7 +323,7 @@ export async function mountApp(root, user) {
 
     if (!ptr) {
       el.innerHTML = headHtml + `
-        <div class="card" style="text-align:center;">
+        <div class="card center">
           <h2 style="font-size:20px; margin-bottom:8px;">All sets done 💪</h2>
           <p class="muted" style="margin-bottom:14px;">${doneSets} of ${totalSets} sets logged.</p>
         </div>`;
@@ -345,24 +345,24 @@ export async function mountApp(root, user) {
       : target.reps != null ? target.reps : "";
 
     el.innerHTML = headHtml + `
-      <p class="muted" style="text-align:center; margin:0;">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
-      <div class="card" style="text-align:center;">
+      <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
+      <div class="card center">
         <h2 style="font-size:20px; margin-bottom:4px;">${escapeHtml(exName(ex.exerciseId))}</h2>
-        <p class="muted" style="margin-bottom:18px;">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${target.weight}${state.unit}` : ""}</p>
+        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${target.weight}${state.unit}` : ""}</p>
         ${!playerArmed ? `
-          <button class="btn btn-primary btn-block" id="playSetBtn" style="padding:22px; font-size:18px;">▶ Start Set</button>
+          <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
           <button class="btn btn-ghost" id="skipSetBtn" style="margin-top:10px;">Skip this set</button>
         ` : `
-          <div style="display:flex; gap:10px; margin-bottom:14px;">
-            <div class="field" style="flex:1; margin:0;"><label>Weight (${state.unit})</label><input type="number" inputmode="decimal" id="playerWeightInput" value="${defaultW}"></div>
-            <div class="field" style="flex:1; margin:0;"><label>Reps</label><input type="number" inputmode="numeric" id="playerRepsInput" value="${defaultReps}"></div>
+          <div class="field-row">
+            <div class="field inline"><label>Weight (${state.unit})</label><input type="number" inputmode="decimal" id="playerWeightInput" value="${defaultW}"></div>
+            <div class="field inline"><label>Reps</label><input type="number" inputmode="numeric" id="playerRepsInput" value="${defaultReps}"></div>
           </div>
           <button class="btn btn-primary btn-block" id="completeSetBtn" style="padding:16px;">✓ Mark Set Done</button>
         `}
       </div>
-      <div style="display:flex; justify-content:center; gap:20px;">
-        <button class="link-btn" id="prevExBtn"${ptr.exi === 0 ? ' disabled style="opacity:.4;"' : ""}>← Prev exercise</button>
-        <button class="link-btn" id="nextExBtn"${ptr.exi === a.exercises.length - 1 ? ' disabled style="opacity:.4;"' : ""}>Next exercise →</button>
+      <div class="player-actions">
+        <button class="link-btn${ptr.exi === 0 ? " disabled" : ""}" id="prevExBtn"${ptr.exi === 0 ? " disabled" : ""}>← Prev exercise</button>
+        <button class="link-btn${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}" id="nextExBtn"${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}>Next exercise →</button>
       </div>`;
 
     bindGuidedHead(a);
