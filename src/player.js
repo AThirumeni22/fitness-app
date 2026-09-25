@@ -24,24 +24,24 @@ export function openTemplateEditor(ctx, template) {
     const rowsHtml = ids.length ? ids.map((id, i) => {
       const t = targetFor(id);
       return `
-        <div class="tpl-edit-row" data-i="${i}" style="border:1px solid var(--border); border-radius:var(--r-m); padding:10px 12px; margin-bottom:8px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
-            <span style="font-weight:600; font-size:14px;">${escapeHtml(ctx.exName(id))}</span>
-            <div style="display:flex; gap:4px; flex-shrink:0;">
+        <div class="tpl-edit-row" data-i="${i}">
+          <div class="tpl-edit-head">
+            <span class="nm">${escapeHtml(ctx.exName(id))}</span>
+            <div class="tpl-edit-actions">
               <button class="icon-btn move-up" data-i="${i}" title="Move up">↑</button>
               <button class="icon-btn move-down" data-i="${i}" title="Move down">↓</button>
               <button class="icon-btn remove-ex" data-i="${i}" title="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
             </div>
           </div>
-          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;">
-            <label style="font-size:11px; color:var(--ink-faint); display:flex; flex-direction:column; gap:3px;">Sets
-              <input type="number" class="t-sets" data-i="${i}" value="${t.sets}" min="1" style="background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-s); padding:8px; font-size:13.5px;">
+          <div class="tpl-edit-grid">
+            <label class="tpl-edit-field">Sets
+              <input type="number" class="t-sets" data-i="${i}" value="${t.sets}" min="1">
             </label>
-            <label style="font-size:11px; color:var(--ink-faint); display:flex; flex-direction:column; gap:3px;">Reps
-              <input type="number" class="t-reps" data-i="${i}" value="${t.reps}" placeholder="—" style="background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-s); padding:8px; font-size:13.5px;">
+            <label class="tpl-edit-field">Reps
+              <input type="number" class="t-reps" data-i="${i}" value="${t.reps}" placeholder="—">
             </label>
-            <label style="font-size:11px; color:var(--ink-faint); display:flex; flex-direction:column; gap:3px;">Weight (${state.unit})
-              <input type="number" class="t-weight" data-i="${i}" value="${t.weight}" placeholder="—" style="background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-s); padding:8px; font-size:13.5px;">
+            <label class="tpl-edit-field">Weight (${state.unit})
+              <input type="number" class="t-weight" data-i="${i}" value="${t.weight}" placeholder="—">
             </label>
           </div>
         </div>`;
