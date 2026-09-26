@@ -19,7 +19,22 @@ export function openProfileSheet(ctx) {
       <div class="field"><label>Name</label><input type="text" id="displayNameInput" placeholder="What friends see" value="${escapeHtml(state.profile.displayName || "")}"></div>
       <p class="muted" style="margin-bottom:14px;">Friends see this name instead of your email, in Friends, the Calendar, and gym-time polls.</p>
       <button class="btn btn-primary btn-block" id="saveProfileBtn">Save</button>
-      <p class="muted" style="margin-top:14px; word-break:break-all;">Signed in as ${escapeHtml(user.email || "")}</p>
+
+      <div class="section-label mt">Settings</div>
+      <div class="field">
+        <label>Weight unit</label>
+        <div class="seg-toggle" id="unitToggle">
+          <button type="button" data-u="kg" class="${state.unit === "kg" ? "active" : ""}">kg</button>
+          <button type="button" data-u="lb" class="${state.unit === "lb" ? "active" : ""}">lb</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Default rest timer (seconds)</label>
+        <input type="number" id="defaultRestInput" min="5" step="5" value="${state.restDuration}">
+      </div>
+      <p class="muted" style="margin-bottom:14px;">Used whenever an exercise doesn't have its own rest time set in a template.</p>
+
+      <p class="muted" style="word-break:break-all;">Signed in as ${escapeHtml(user.email || "")}</p>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     document.getElementById("pickAvatarBtn").addEventListener("click", () => document.getElementById("avatarInput").click());
@@ -31,6 +46,14 @@ export function openProfileSheet(ctx) {
       draw();
     });
     document.getElementById("saveProfileBtn").addEventListener("click", save);
+    document.querySelectorAll("#unitToggle button").forEach((b) => b.addEventListener("click", () => {
+      ctx.setUnit(b.getAttribute("data-u"));
+      draw();
+    }));
+    document.getElementById("defaultRestInput").addEventListener("change", (e) => {
+      const v = parseInt(e.target.value, 10);
+      if (v > 0) { ctx.saveRestDuration(v); toast("Default rest timer updated"); }
+    });
   }
 
   async function save() {
