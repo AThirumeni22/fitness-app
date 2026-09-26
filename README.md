@@ -1,4 +1,4 @@
-# Trainlog
+# SocialGym
 
 A workout logger you and your friends can each sign into and keep your own
 training history in. Log sets and reps, get an auto-starting rest timer,
@@ -25,6 +25,10 @@ no server to run yourself.
    other's workouts, a day-by-day photo/video feed, and two public storage
    buckets (`avatars`, `day-media`) it creates for you. Run it once, after
    schema.sql.
+2c. Run a third query with the contents of
+   [`supabase/migration_3_plan_template.sql`](./supabase/migration_3_plan_template.sql).
+   This just adds one column (an optional template name on a proposed gym
+   session) — run it once, after migration_2_social.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -68,7 +72,7 @@ which is: read and write your own rows, never anyone else's.
 - Every table (`profiles`, `custom_exercises`, `templates`, `workouts`) has
   a `user_id` column and a Row Level Security policy that only allows a
   signed-in user to touch rows where `user_id` matches their own id.
-- The built-in exercise library (870+ exercises, `public/exercises-data.json`)
+- The built-in exercise library (875+ exercises, `public/exercises-data.json`)
   and starter templates (`src/exercises.js`) aren't stored in the database at
   all — they ship with the app for everyone. Only exercises/templates someone
   adds themselves, and their finished workouts, are saved to their account.
@@ -88,27 +92,33 @@ which is: read and write your own rows, never anyone else's.
   BeReal-style feed of that day's photos/videos with an upload button.
   Friend visibility relies entirely on Row Level Security — the client
   never decides who can see what.
-- **Plan a session** — at the bottom of the Calendar tab: propose one or
-  more time options, friends vote for as many as work for them, and the
-  option with the most votes is your answer for "when's everyone free."
+- **Plan a session** — at the bottom of the Calendar tab, "Propose a time"
+  is a single simple form: a title, a date, a time picked with a slider,
+  and (optionally) one of your own templates so friends know the workout
+  in advance. Friends just tap "I'm in" — no multi-option poll to manage.
 - **Profile** — tap the small circle in the top bar to set the name and
   photo your friends see you as (stored avatar in the `avatars` bucket).
+  It's also where your weight unit (kg/lb) and your default rest timer
+  live now, under a Settings section.
 - **Guided template player** — from the Exercises tab, the ▶ icon on a
   template runs it set-by-set: hit Play, then the checkmark when you're
   done with a weight/reps you can adjust on the spot; it tells you if
-  that's a new PR or below your last best, then starts your rest timer
-  automatically. The pencil icon opens the template editor, where you can
-  reorder exercises, add/remove them, and set a target sets/reps/weight
-  per exercise for the player to use.
-- **Rest timer** — the duration you pick in the Timer sheet (a preset or a
-  custom number of seconds) is remembered and reused the next time a set
-  auto-starts the timer, instead of a fixed 90 seconds.
+  that's a new PR or below your last best, then starts that exercise's
+  own rest timer automatically. The pencil icon opens the template
+  editor, where you can reorder exercises, add/remove them, and set a
+  target sets/reps/weight/rest per exercise for the player to use.
+- **Per-exercise rest timer** — each exercise in a template can have its
+  own rest duration (set in the template editor); exercises without one
+  fall back to the default rest timer from your Profile settings. When
+  the countdown hits zero the banner flips color and turns into a
+  stopwatch counting up, so you can see exactly how far over rest you've
+  gone before starting your next set.
 
 One current limitation worth knowing: a friend's own custom exercises
 (ones they added themselves, not from the built-in library) show up in
 their workout history with just a name, not a category, since categories
 for custom exercises aren't shared across accounts — everything from the
-870+ built-in library works normally either way.
+875+ built-in library works normally either way.
 
 ## Exercise library
 
@@ -139,8 +149,9 @@ src/
   utils.js            Formatting/unit-conversion helpers
   style.css           All styling
 supabase/
-  schema.sql             Base schema + Row Level Security policies
-  migration_2_social.sql Friends, calendar/day-posts, gym-time polls, storage buckets
+  schema.sql                    Base schema + Row Level Security policies
+  migration_2_social.sql        Friends, calendar/day-posts, gym-time polls, storage buckets
+  migration_3_plan_template.sql Adds an optional template name to proposed gym sessions
 ```
 
 ## Local development notes
