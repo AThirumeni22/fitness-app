@@ -8,13 +8,13 @@ const root = document.getElementById("app");
 if (configMissing) {
   root.innerHTML = `
     <div class="boot-loading err">
-      <p><strong>Trainlog isn't configured yet.</strong></p>
+      <p><strong>SocialGym isn't configured yet.</strong></p>
       <p>Copy <code>.env.example</code> to <code>.env</code> and fill in your Supabase project URL and anon key, then restart the dev server. See the README for the full setup steps.</p>
     </div>`;
 } else if (configError) {
   root.innerHTML = `
     <div class="boot-loading err">
-      <p><strong>Trainlog can't connect to Supabase.</strong></p>
+      <p><strong>SocialGym can't connect to Supabase.</strong></p>
       <p>${configError}</p>
       <p>Double-check <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> (in Vercel's Environment Variables, or your local <code>.env</code>) — the URL should look like <code>https://xxxxx.supabase.co</code> with no quotes or trailing slash — then redeploy.</p>
     </div>`;
