@@ -33,19 +33,19 @@ export async function renderFriends(ctx) {
     const incomingHtml = data.incoming.length
       ? data.incoming.map((r) => row(r,
           `<button class="btn btn-primary btn-sm accept-btn" data-id="${r.id}">Accept</button>
-           <button class="icon-btn decline-btn" data-id="${r.id}" title="Decline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
+           <button class="icon-btn decline-btn" data-id="${r.id}" title="Decline" aria-label="Decline request"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
           "wants to be friends")).join('<div style="height:8px"></div>')
       : "";
 
     const outgoingHtml = data.outgoing.length
       ? data.outgoing.map((r) => row(r,
-          `<button class="icon-btn cancel-btn" data-id="${r.id}" title="Cancel request"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
+          `<button class="icon-btn cancel-btn" data-id="${r.id}" title="Cancel request" aria-label="Cancel request"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
           "Request sent — waiting")).join('<div style="height:8px"></div>')
       : "";
 
     const friendsHtml = data.accepted.length
       ? data.accepted.map((r) => row(r,
-          `<button class="icon-btn remove-btn" data-id="${r.id}" title="Remove friend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
+          `<button class="icon-btn remove-btn" data-id="${r.id}" title="Remove friend" aria-label="Remove friend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
           "Friends")).join('<div style="height:8px"></div>')
       : '<p class="muted">No friends yet — add one by email below.</p>';
 
