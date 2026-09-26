@@ -52,7 +52,7 @@ export async function renderFriends(ctx) {
     el.innerHTML = `
       <div class="card">
         <h2 style="font-size:19px; margin-bottom:10px;">Add a friend</h2>
-        <p class="muted" style="margin-bottom:10px;">They need a Trainlog account already — add them by the email they signed up with.</p>
+        <p class="muted" style="margin-bottom:10px;">They need a SocialGym account already — add them by the email they signed up with.</p>
         <div class="field" style="margin-bottom:8px;"><input type="email" id="friendEmailInput" placeholder="their.email@example.com"></div>
         <button class="btn btn-primary btn-block" id="sendReqBtn">Send Request</button>
         <p class="muted" id="addFriendMsg" style="margin-top:8px; min-height:16px;"></p>
@@ -71,7 +71,7 @@ export async function renderFriends(ctx) {
       msg.textContent = "Searching…";
       try {
         const found = await ctx.db.findUserByEmail(email);
-        if (!found) { msg.textContent = "No Trainlog account with that email."; return; }
+        if (!found) { msg.textContent = "No SocialGym account with that email."; return; }
         if (found.id === ctx.user.id) { msg.textContent = "That's your own account."; return; }
         const already = [...data.accepted, ...data.incoming, ...data.outgoing].find((r) => r.otherId === found.id);
         if (already) { msg.textContent = "You've already got a request with them."; return; }
