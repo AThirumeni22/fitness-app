@@ -8,7 +8,7 @@ export function renderAuthScreen(root) {
       <div class="auth-shell">
         <div class="auth-card">
           <div class="auth-brand">
-            <span class="mark">Trainlog</span>
+            <span class="mark">SocialGym</span>
             <span class="tag">train with your friends</span>
           </div>
           <div class="auth-tabs">
