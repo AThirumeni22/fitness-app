@@ -257,15 +257,18 @@ export async function listDayPosts(userIds, startDate, endDate) {
 
 // ================= gym plans (propose a time, vote) =================
 
-export async function createGymPlan(userId, title, optionIsoDates) {
+// A plan is now always exactly one date/time (optionally naming one of the
+// creator's templates) — simpler than the old multi-option poll. The
+// options/votes tables are unchanged underneath (a plan just always gets
+// exactly one option row), so existing data keeps working.
+export async function createGymPlan(userId, title, startsAtIso, templateName) {
   const { data: plan, error } = await supabase
     .from("gym_plans")
-    .insert({ creator_id: userId, title })
-    .select("id, creator_id, title, created_at")
+    .insert({ creator_id: userId, title, template_name: templateName || null })
+    .select("id, creator_id, title, template_name, created_at")
     .single();
   if (error) throw error;
-  const rows = optionIsoDates.map((iso) => ({ plan_id: plan.id, starts_at: iso }));
-  const { error: optErr } = await supabase.from("gym_plan_options").insert(rows);
+  const { error: optErr } = await supabase.from("gym_plan_options").insert({ plan_id: plan.id, starts_at: startsAtIso });
   if (optErr) throw optErr;
   return plan;
 }
@@ -274,7 +277,7 @@ export async function listGymPlans(userId, friendIds) {
   const ids = [userId, ...friendIds];
   const { data: plans, error } = await supabase
     .from("gym_plans")
-    .select("id, creator_id, title, created_at")
+    .select("id, creator_id, title, template_name, created_at")
     .in("creator_id", ids)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -290,6 +293,7 @@ export async function listGymPlans(userId, friendIds) {
     id: p.id,
     creatorId: p.creator_id,
     title: p.title,
+    templateName: p.template_name,
     createdAt: p.created_at,
     options: (options || [])
       .filter((o) => o.plan_id === p.id)
