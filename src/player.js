@@ -28,9 +28,9 @@ export function openTemplateEditor(ctx, template) {
           <div class="tpl-edit-head">
             <span class="nm">${escapeHtml(ctx.exName(id))}</span>
             <div class="tpl-edit-actions">
-              <button class="icon-btn move-up" data-i="${i}" title="Move up">↑</button>
-              <button class="icon-btn move-down" data-i="${i}" title="Move down">↓</button>
-              <button class="icon-btn remove-ex" data-i="${i}" title="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+              <button class="icon-btn move-up" data-i="${i}" title="Move up" aria-label="Move exercise up">↑</button>
+              <button class="icon-btn move-down" data-i="${i}" title="Move down" aria-label="Move exercise down">↓</button>
+              <button class="icon-btn remove-ex" data-i="${i}" title="Remove" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
             </div>
           </div>
           <div class="tpl-edit-grid">
@@ -48,7 +48,7 @@ export function openTemplateEditor(ctx, template) {
     }).join("") : '<p class="muted" style="margin-bottom:10px;">No exercises yet — add some below.</p>';
 
     openSheet(`
-      <div class="sheet-title"><h3>${isNew ? "New Template" : "Edit Template"}</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>${isNew ? "New Template" : "Edit Template"}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><label>Name</label><input type="text" id="tplNameInput" value="${escapeHtml(name)}" placeholder="e.g. Upper Body A"></div>
       ${isBuiltIn ? '<p class="muted" style="margin-bottom:10px;">This is a built-in template — saving will create your own editable copy.</p>' : ""}
       <div id="tplEditRows">${rowsHtml}</div>
