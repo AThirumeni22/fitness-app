@@ -8,7 +8,7 @@ export function openProfileSheet(ctx) {
   function draw() {
     const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
     openSheet(`
-      <div class="sheet-title"><h3>Your Profile</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>Your Profile</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="avatar-wrap">
         <div id="avatarPreviewWrap" class="avatar-lg">
           ${previewUrl ? `<img id="avatarPreviewImg" src="${previewUrl}">` : escapeHtml(initial)}
