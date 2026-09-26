@@ -12,7 +12,7 @@ export function openTemplateEditor(ctx, template) {
 
   function targetFor(id) {
     const t = targets[id] || {};
-    return { sets: t.sets || 3, reps: t.reps ?? "", weight: t.weight ?? "" };
+    return { sets: t.sets || 3, reps: t.reps ?? "", weight: t.weight ?? "", rest: t.rest || 90 };
   }
 
   function syncName() {
@@ -43,6 +43,9 @@ export function openTemplateEditor(ctx, template) {
             <label class="tpl-edit-field">Weight (${state.unit})
               <input type="number" class="t-weight" data-i="${i}" value="${t.weight}" placeholder="—">
             </label>
+            <label class="tpl-edit-field">Rest (sec)
+              <input type="number" class="t-rest" data-i="${i}" value="${t.rest}" min="0" step="5">
+            </label>
           </div>
         </div>`;
     }).join("") : '<p class="muted" style="margin-bottom:10px;">No exercises yet — add some below.</p>';
@@ -61,13 +64,15 @@ export function openTemplateEditor(ctx, template) {
   function bind() {
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     document.getElementById("tplNameInput").addEventListener("input", syncName);
-    document.querySelectorAll(".t-sets, .t-reps, .t-weight").forEach((inp) => inp.addEventListener("input", (e) => {
+    document.querySelectorAll(".t-sets, .t-reps, .t-weight, .t-rest").forEach((inp) => inp.addEventListener("input", (e) => {
       const i = parseInt(e.target.getAttribute("data-i"), 10);
       const id = ids[i];
       const cur = targets[id] || {};
-      const field = e.target.classList.contains("t-sets") ? "sets" : e.target.classList.contains("t-reps") ? "reps" : "weight";
+      const field = e.target.classList.contains("t-sets") ? "sets"
+        : e.target.classList.contains("t-reps") ? "reps"
+        : e.target.classList.contains("t-rest") ? "rest" : "weight";
       const raw = e.target.value;
-      const v = raw === "" ? (field === "sets" ? 3 : null) : Number(raw);
+      const v = raw === "" ? (field === "sets" ? 3 : field === "rest" ? 90 : null) : Number(raw);
       targets[id] = { ...cur, [field]: v };
     }));
     document.querySelectorAll(".move-up").forEach((b) => b.addEventListener("click", () => {
