@@ -92,9 +92,9 @@ export async function renderCalendar(ctx) {
 
     el.innerHTML = `
       <div class="card" style="display:flex; align-items:center; justify-content:space-between;">
-        <button class="icon-btn" id="prevMonthBtn">‹</button>
+        <button class="icon-btn" id="prevMonthBtn" title="Previous month" aria-label="Previous month">‹</button>
         <h2 style="font-size:17px;">${MONTH_NAMES[month]} ${year}</h2>
-        <button class="icon-btn" id="nextMonthBtn">›</button>
+        <button class="icon-btn" id="nextMonthBtn" title="Next month" aria-label="Next month">›</button>
       </div>
       <div class="cal-dow-row">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
       <div class="cal-grid">${cells}</div>
@@ -127,7 +127,7 @@ export async function renderCalendar(ctx) {
       return `<div class="card" style="margin-bottom:10px;">
         <div style="display:flex; align-items:center; justify-content:space-between;">
           <h4 style="font-size:15px;">${ctx.escapeHtml(p.title)}</h4>
-          ${p.creatorId === ctx.user.id ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
+          ${p.creatorId === ctx.user.id ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Delete" aria-label="Delete plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
         </div>
         <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${optsHtml}</div>
       </div>`;
@@ -162,10 +162,10 @@ function openNewPlanSheet(ctx, onDone) {
     const optsHtml = options.map((v, i) => `
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <input type="datetime-local" class="plan-opt-input" data-i="${i}" value="${v}" style="flex:1; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-s); padding:10px; font-size:13.5px;">
-        ${options.length > 1 ? `<button class="icon-btn rm-opt" data-i="${i}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
+        ${options.length > 1 ? `<button class="icon-btn rm-opt" data-i="${i}" title="Remove time option" aria-label="Remove time option"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
       </div>`).join("");
     openSheet(`
-      <div class="sheet-title"><h3>Propose a Time</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>Propose a Time</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><label>Title</label><input type="text" id="planTitleInput" placeholder="e.g. Leg day?" value="Gym session"></div>
       <label style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:600;">Time options — friends can vote for as many as they like</label>
       <div id="planOptsWrap" style="margin-top:8px;">${optsHtml}</div>
@@ -226,7 +226,7 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
       </div>`).join("")}</div>` : '<p class="muted">No photos or videos yet.</p>';
 
     openSheet(`
-      <div class="sheet-title"><h3>${escapeHtml(dateKey)}</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>${escapeHtml(dateKey)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="section-label">Who trained</div>
       <div class="card" style="margin-bottom:14px;">${whoHtml}</div>
       <div class="section-label">Photos &amp; Videos</div>
