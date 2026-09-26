@@ -109,10 +109,10 @@ export async function mountApp(root, user) {
             Timer
           </button>
           <button class="chip-btn" id="unitBtn" title="Toggle weight unit">${state.unit}</button>
-          <button class="chip-btn" id="profileBtn" title="Your profile">
+          <button class="chip-btn" id="profileBtn" title="Your profile" aria-label="Your profile">
             <span id="topbarAvatar" class="avatar-sm">${avatarHtml()}</span>
           </button>
-          <button class="chip-btn" id="signOutBtn" title="Sign out">
+          <button class="chip-btn" id="signOutBtn" title="Sign out" aria-label="Sign out">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
           </button>
         </div>
@@ -315,7 +315,7 @@ export async function mountApp(root, user) {
       <div class="active-head">
         <div><div class="elapsed-label">In progress · Guided</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
         <div class="head-actions">
-          <button class="icon-btn" id="discardBtn" title="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
+          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
           <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
         </div>
       </div>
@@ -324,7 +324,7 @@ export async function mountApp(root, user) {
     if (!ptr) {
       el.innerHTML = headHtml + `
         <div class="card center">
-          <h2 style="font-size:20px; margin-bottom:8px;">All sets done 💪</h2>
+          <h2 style="font-size:20px; margin-bottom:8px;">All sets done</h2>
           <p class="muted" style="margin-bottom:14px;">${doneSets} of ${totalSets} sets logged.</p>
         </div>`;
       bindGuidedHead(a);
@@ -384,7 +384,7 @@ export async function mountApp(root, user) {
         set.kg = kg; set.reps = r; set.done = true;
         manualPtr = null;
         saveActiveDraft();
-        if (prevBest && kg > prevBest) toast(`🎉 New PR — ${roundDisp(w)} ${state.unit}!`);
+        if (prevBest && kg > prevBest) toast(`New PR — ${roundDisp(w)} ${state.unit}`);
         else if (prevBest && kg < prevBest) toast(`Logged — your best is ${roundDisp(fromKg(prevBest, state.unit))} ${state.unit}`);
         else toast("Set logged");
         startRestTimer(state.restDuration);
@@ -464,7 +464,7 @@ export async function mountApp(root, user) {
         <div class="exercise-card" data-exi="${exi}">
           <div class="exercise-card-head">
             <div><h3>${escapeHtml(exName(ex.exerciseId))}</h3><span class="cat-tag">${escapeHtml(exCat(ex.exerciseId))}</span></div>
-            <button class="icon-btn remove-ex" title="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <button class="icon-btn remove-ex" title="Remove exercise" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>
           <div class="sets-table">
             <div class="sets-head"><span></span><span>Weight (${state.unit})</span><span>Reps</span><span></span><span></span></div>
@@ -478,7 +478,7 @@ export async function mountApp(root, user) {
       <div class="active-head">
         <div><div class="elapsed-label">In progress</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
         <div class="head-actions">
-          <button class="icon-btn" id="discardBtn" title="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
+          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
           <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
         </div>
       </div>
@@ -584,7 +584,7 @@ export async function mountApp(root, user) {
     }
 
     openSheet(`
-      <div class="sheet-title"><h3>${title}</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>${title}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><input type="text" id="pickerSearch" placeholder="Search exercises…"></div>
       <div id="pickerBody">${draw("")}</div>
     `);
@@ -676,7 +676,7 @@ export async function mountApp(root, user) {
     if (state.timer) return;
     const presets = [30, 60, 90, 120];
     openSheet(`
-      <div class="sheet-title"><h3>Rest Timer</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>Rest Timer</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <p class="muted" style="margin-bottom:10px;">This is also what auto-starts when you mark a set done.</p>
       <div class="preset-row">
         ${presets.map((s) => `<button data-s="${s}" class="${s === state.restDuration ? "active" : ""}">${s}s</button>`).join("")}
@@ -751,7 +751,7 @@ export async function mountApp(root, user) {
 
     let chartHtml;
     if (!exWithHist.length) {
-      chartHtml = '<div class="card empty-state"><div class="glyph">📈</div><p>Log a few workouts to start seeing progress charts here.</p></div>';
+      chartHtml = '<div class="card empty-state"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><p>Log a few workouts to start seeing progress charts here.</p></div>';
     } else {
       const opts = exWithHist.map((id) => `<option value="${id}"${id === chartExId ? " selected" : ""}>${escapeHtml(exName(id))}</option>`).join("");
       chartHtml = `
@@ -767,7 +767,7 @@ export async function mountApp(root, user) {
 
     let sessHtml;
     if (!state.history.length) {
-      sessHtml = '<div class="card empty-state"><div class="glyph">🗓️</div><p>No workouts yet — finish your first session and it will show up here.</p></div>';
+      sessHtml = '<div class="card empty-state"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><p>No workouts yet — finish your first session and it will show up here.</p></div>';
     } else {
       sessHtml = state.history.map((sess) => {
         const vol = sess.exercises.reduce((sum, ex) => sum + ex.sets.reduce((s2, s) => s2 + (s.kg || 0) * (s.reps || 0), 0), 0);
@@ -824,10 +824,10 @@ export async function mountApp(root, user) {
     const tplHtml = state.templates.length ? state.templates.map((t) => `
       <div class="tpl-list-card" style="flex-wrap:wrap;">
         <div class="info"><h4>${escapeHtml(t.name)}</h4><p>${escapeHtml(t.exerciseIds.map(exName).join(", "))}</p></div>
-        <button class="icon-btn run-tpl" data-id="${t.id}" title="Run guided"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg></button>
-        <button class="icon-btn edit-tpl" data-id="${t.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+        <button class="icon-btn run-tpl" data-id="${t.id}" title="Run guided" aria-label="Run guided"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg></button>
+        <button class="icon-btn edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
         <button class="btn btn-secondary btn-sm start-tpl2" data-id="${t.id}">Start</button>
-        ${t.isCustom ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
+        ${t.isCustom ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
       </div>`).join('<div style="height:8px"></div>') : '<p class="muted">No templates yet.</p>';
 
     const byCat = {};
@@ -850,7 +850,7 @@ export async function mountApp(root, user) {
             <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
             <div class="pr">${pr > 0 ? `PR ${roundDisp(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
             ${e.isCustom
-              ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
+              ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
               : `<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`}
           </div>`;
       }).join("");
@@ -911,7 +911,7 @@ export async function mountApp(root, user) {
     const hasImgs = Array.isArray(ex.images) && ex.images.length >= 2;
     const instrHtml = (ex.instructions || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
     openSheet(`
-      <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="ex-tags">
         <span class="ex-tag">${escapeHtml(ex.cat)}</span>
         ${ex.equipment ? `<span class="ex-tag">${escapeHtml(ex.equipment)}</span>` : ""}
@@ -942,7 +942,7 @@ export async function mountApp(root, user) {
   function openCustomExerciseForm() {
     const catOpts = CAT_ORDER.map((c) => `<option value="${c}">${c}</option>`).join("");
     openSheet(`
-      <div class="sheet-title"><h3>New Exercise</h3><button class="icon-btn" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sheet-title"><h3>New Exercise</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><label>Name</label><input type="text" id="newExName" placeholder="e.g. Cable Crossover"></div>
       <div class="field"><label>Category</label><select id="newExCat">${catOpts}</select></div>
       <button class="btn btn-primary btn-block" id="saveExBtn">Save Exercise</button>
