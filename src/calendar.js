@@ -91,9 +91,9 @@ export async function renderCalendar(ctx) {
     }
 
     el.innerHTML = `
-      <div class="card" style="display:flex; align-items:center; justify-content:space-between;">
+      <div class="card cal-header">
         <button class="icon-btn" id="prevMonthBtn" title="Previous month" aria-label="Previous month">‹</button>
-        <h2 style="font-size:17px;">${MONTH_NAMES[month]} ${year}</h2>
+        <h2>${MONTH_NAMES[month]} ${year}</h2>
         <button class="icon-btn" id="nextMonthBtn" title="Next month" aria-label="Next month">›</button>
       </div>
       <div class="cal-dow-row">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
@@ -115,21 +115,21 @@ export async function renderCalendar(ctx) {
     const newBtnHtml = `<button class="btn btn-secondary btn-block" id="newPlanBtn">+ Propose a time</button>`;
     if (!plansList.length) return `<div class="card"><p class="muted">No sessions proposed yet.</p></div>${newBtnHtml}`;
     const cardsHtml = plansList.map((p) => {
-      const optsHtml = p.options.map((o) => {
-        const mine = o.voterIds.includes(ctx.user.id);
-        const names = o.voterIds.map((id) => nameById[id] || "Someone").join(", ");
-        return `
-          <button class="vote-option${mine ? " mine" : ""}" data-plan="${p.id}" data-opt="${o.id}">
-            <span>${fmtWhen(o.startsAt)}</span>
-            <span class="vote-count">${o.voterIds.length ? o.voterIds.length + " · " + ctx.escapeHtml(names) : "No votes yet"}</span>
-          </button>`;
-      }).join("");
-      return `<div class="card" style="margin-bottom:10px;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <h4 style="font-size:15px;">${ctx.escapeHtml(p.title)}</h4>
+      const opt = p.options[0];
+      if (!opt) return "";
+      const mine = opt.voterIds.includes(ctx.user.id);
+      const names = opt.voterIds.map((id) => nameById[id] || "Someone");
+      return `<div class="plan-card">
+        <div class="plan-card-head">
+          <div>
+            <h4>${ctx.escapeHtml(p.title)}</h4>
+            <div class="plan-when">${fmtWhen(opt.startsAt)}</div>
+            ${p.templateName ? `<span class="plan-tpl-badge">${ctx.escapeHtml(p.templateName)}</span>` : ""}
+          </div>
           ${p.creatorId === ctx.user.id ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Delete" aria-label="Delete plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">${optsHtml}</div>
+        <button class="btn ${mine ? "btn-primary" : "btn-secondary"} btn-block join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="${mine ? "1" : "0"}">${mine ? "You're in" : "I'm in"}</button>
+        <p class="plan-who muted">${names.length ? ctx.escapeHtml(names.join(", ")) : "No one yet"}</p>
       </div>`;
     }).join("");
     return cardsHtml + newBtnHtml;
@@ -138,9 +138,9 @@ export async function renderCalendar(ctx) {
   function bindPlans() {
     const newBtn = document.getElementById("newPlanBtn");
     if (newBtn) newBtn.addEventListener("click", () => openNewPlanSheet(ctx, () => renderCalendar(ctx)));
-    el.querySelectorAll(".vote-option").forEach((b) => b.addEventListener("click", async () => {
+    el.querySelectorAll(".join-plan").forEach((b) => b.addEventListener("click", async () => {
       const planId = b.getAttribute("data-plan"), optId = b.getAttribute("data-opt");
-      const mine = b.classList.contains("mine");
+      const mine = b.getAttribute("data-mine") === "1";
       try {
         if (mine) await ctx.db.unvoteGymPlanOption(optId, ctx.user.id);
         else await ctx.db.voteGymPlanOption(planId, optId, ctx.user.id);
@@ -154,50 +154,61 @@ export async function renderCalendar(ctx) {
   }
 }
 
+function timeLabel(mins) {
+  let h = Math.floor(mins / 60), m = mins % 60;
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${m < 10 ? "0" : ""}${m} ${ampm}`;
+}
+
+// One date, one time (picked with a slider), one optional template — kept
+// deliberately simple so proposing a session is a 10-second, no-friction
+// action instead of a small poll-building exercise.
 function openNewPlanSheet(ctx, onDone) {
-  const { openSheet, closeSheet, toast } = ctx;
-  let options = [""];
+  const { openSheet, closeSheet, toast, escapeHtml, state } = ctx;
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+  let minutes = 18 * 60; // default 6:00 PM
 
   function draw() {
-    const optsHtml = options.map((v, i) => `
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-        <input type="datetime-local" class="plan-opt-input" data-i="${i}" value="${v}" style="flex:1; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-s); padding:10px; font-size:13.5px;">
-        ${options.length > 1 ? `<button class="icon-btn rm-opt" data-i="${i}" title="Remove time option" aria-label="Remove time option"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
-      </div>`).join("");
+    const tplOptsHtml = `<option value="">No specific template</option>` +
+      (state.templates || []).map((t) => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("");
     openSheet(`
       <div class="sheet-title"><h3>Propose a Time</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><label>Title</label><input type="text" id="planTitleInput" placeholder="e.g. Leg day?" value="Gym session"></div>
-      <label style="font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); font-weight:600;">Time options — friends can vote for as many as they like</label>
-      <div id="planOptsWrap" style="margin-top:8px;">${optsHtml}</div>
-      <button class="btn btn-secondary btn-block" id="addOptBtn" style="margin-bottom:14px;">+ Add another time</button>
-      <button class="btn btn-primary btn-block" id="savePlanBtn">Create Poll</button>
+      <div class="field"><label>Date</label><input type="date" id="planDateInput" value="${dateStr}"></div>
+      <div class="field">
+        <label>Time — <span id="timeLabelOut">${timeLabel(minutes)}</span></label>
+        <input type="range" id="planTimeSlider" class="time-slider" min="300" max="1380" step="15" value="${minutes}">
+      </div>
+      <div class="field"><label>Template (optional)</label><select id="planTplSelect">${tplOptsHtml}</select></div>
+      <button class="btn btn-primary btn-block" id="savePlanBtn">Propose</button>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
-    document.querySelectorAll(".plan-opt-input").forEach((inp) => inp.addEventListener("input", (e) => {
-      options[parseInt(e.target.getAttribute("data-i"), 10)] = e.target.value;
-    }));
-    document.querySelectorAll(".rm-opt").forEach((b) => b.addEventListener("click", () => {
-      options.splice(parseInt(b.getAttribute("data-i"), 10), 1);
-      draw();
-    }));
-    document.getElementById("addOptBtn").addEventListener("click", () => { options.push(""); draw(); });
+    document.getElementById("planTimeSlider").addEventListener("input", (e) => {
+      minutes = parseInt(e.target.value, 10);
+      document.getElementById("timeLabelOut").textContent = timeLabel(minutes);
+    });
     document.getElementById("savePlanBtn").addEventListener("click", save);
   }
 
   async function save() {
     const title = document.getElementById("planTitleInput").value.trim() || "Gym session";
-    const isoOptions = options.filter(Boolean).map((v) => new Date(v).toISOString());
-    if (!isoOptions.length) { toast("Add at least one time option"); return; }
+    const dateVal = document.getElementById("planDateInput").value;
+    if (!dateVal) { toast("Pick a date"); return; }
+    const dt = new Date(dateVal + "T00:00:00");
+    dt.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    const templateName = document.getElementById("planTplSelect").value || null;
     const btn = document.getElementById("savePlanBtn");
-    btn.disabled = true; btn.textContent = "Creating…";
+    btn.disabled = true; btn.textContent = "Proposing…";
     try {
-      await ctx.db.createGymPlan(ctx.user.id, title, isoOptions);
+      await ctx.db.createGymPlan(ctx.user.id, title, dt.toISOString(), templateName);
       closeSheet();
-      toast("Poll created");
+      toast("Session proposed");
       onDone();
     } catch (err) {
-      toast("Couldn't create poll: " + (err.message || String(err)));
-      btn.disabled = false; btn.textContent = "Create Poll";
+      toast("Couldn't propose that: " + (err.message || String(err)));
+      btn.disabled = false; btn.textContent = "Propose";
     }
   }
 
