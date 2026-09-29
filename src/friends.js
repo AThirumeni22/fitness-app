@@ -35,7 +35,7 @@ export async function renderFriends(ctx) {
       data.accepted.forEach((r) => { nameById[r.otherId] = r.otherProfile; });
       feed = rows
         .slice()
-        .reverse()
+        .sort((x, y) => new Date(y.date) - new Date(x.date))
         .slice(0, FEED_LIMIT)
         .map((w) => ({
           ...w,
@@ -98,19 +98,21 @@ export async function renderFriends(ctx) {
       ${feed.length ? feed.map(feedCard).join("") : '<div class="card"><p class="muted">No workouts from you or your friends in the last three weeks.</p></div>'}
     ` : "";
 
+    // Order: incoming requests (need action) → your friends → their recent
+    // workouts → add a friend → requests you've sent.
     el.innerHTML = `
-      ${feedHtml}
-      <div class="card">
+      ${incomingHtml ? `<div class="section-label">Requests</div>${incomingHtml}` : ""}
+      <div class="section-label"${incomingHtml ? ' style="margin-top:6px;"' : ""}>Friends</div>
+      ${friendsHtml}
+      ${feedHtml ? `<div style="height:10px"></div>${feedHtml}` : ""}
+      <div class="card" style="margin-top:6px;">
         <h2 style="font-size:19px; margin-bottom:10px;">Add a friend</h2>
-        <p class="muted" style="margin-bottom:10px;">They need a SocialGym account already — add them by the email they signed up with.</p>
+        <p class="muted" style="margin-bottom:10px;">They need an Obonto account already — add them by the email they signed up with.</p>
         <div class="field" style="margin-bottom:8px;"><input type="email" id="friendEmailInput" placeholder="their.email@example.com"></div>
         <button class="btn btn-primary btn-block" id="sendReqBtn">Send Request</button>
         <p class="muted" id="addFriendMsg" style="margin-top:8px; min-height:16px;"></p>
       </div>
-      ${incomingHtml ? `<div class="section-label" style="margin-top:6px;">Requests</div>${incomingHtml}` : ""}
       ${outgoingHtml ? `<div class="section-label" style="margin-top:6px;">Sent</div>${outgoingHtml}` : ""}
-      <div class="section-label" style="margin-top:6px;">Friends</div>
-      ${friendsHtml}
     `;
 
     document.getElementById("sendReqBtn").addEventListener("click", async () => {
@@ -121,7 +123,7 @@ export async function renderFriends(ctx) {
       msg.textContent = "Searching…";
       try {
         const found = await ctx.db.findUserByEmail(email);
-        if (!found) { msg.textContent = "No SocialGym account with that email."; return; }
+        if (!found) { msg.textContent = "No Obonto account with that email."; return; }
         if (found.id === ctx.user.id) { msg.textContent = "That's your own account."; return; }
         const already = [...data.accepted, ...data.incoming, ...data.outgoing].find((r) => r.otherId === found.id);
         if (already) { msg.textContent = "You've already got a request with them."; return; }
