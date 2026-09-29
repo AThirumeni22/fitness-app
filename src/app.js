@@ -1,7 +1,7 @@
 import { supabase } from "./supabaseClient.js";
 import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary } from "./exercises.js";
 import {
-  uid, byId, toKg, fromKg, roundDisp,
+  uid, byId, toKg, fromKg, roundDisp, parseNum, fmtNum,
   fmtDate, fmtShort, fmtDuration, fmtClock, fmtElapsed, escapeHtml
 } from "./utils.js";
 import { drawChart } from "./chart.js";
@@ -10,6 +10,7 @@ import { renderFriends } from "./friends.js";
 import { renderCalendar } from "./calendar.js";
 import { openProfileSheet } from "./profile.js";
 import { openTemplateEditor } from "./player.js";
+import { muscleChartHtml } from "./musclechart.js";
 
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
@@ -153,7 +154,7 @@ export async function mountApp(root, user) {
     <div class="app">
       <header class="topbar">
         <div class="brand">
-          <span class="mark">SocialGym</span>
+          <span class="mark">Obonto</span>
           <span class="tag" id="dateTag">—</span>
         </div>
         <div class="actions">
@@ -277,10 +278,81 @@ export async function mountApp(root, user) {
     }
     playerArmed = false;
     manualPtr = null;
-    state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided };
+    state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided, templateId: templateId || null };
     saveActiveDraft();
     renderTrain();
     toast(templateId ? (guided ? "Guided workout started" : "Workout started") : "Empty workout started");
+  }
+
+  // After a template-based workout: offer to write today's numbers back into
+  // the template so next time's guided targets start from where you left off.
+  // Per exercise we take the heaviest logged set (reps from that same set)
+  // and the number of sets you actually logged; rest time is left alone.
+  function offerTemplateUpdate(templateId, cleanEx) {
+    const t = byId(state.templates, templateId);
+    if (!t) return;
+    const newTargets = { ...(t.targets || {}) };
+    const changes = [];
+    cleanEx.forEach((ex) => {
+      if (!t.exerciseIds.includes(ex.exerciseId)) return;
+      const top = ex.sets.reduce((best, st) => (!best || st.kg > best.kg || (st.kg === best.kg && st.reps > best.reps) ? st : best), null);
+      if (!top) return;
+      const old = newTargets[ex.exerciseId] || {};
+      const next = { ...old, sets: ex.sets.length, reps: top.reps, weight: roundDisp(fromKg(top.kg, state.unit)) };
+      if (next.sets !== (old.sets || 3) || next.reps !== old.reps || next.weight !== old.weight) {
+        changes.push({ name: ex.name, old, next });
+        newTargets[ex.exerciseId] = next;
+      }
+    });
+    if (!changes.length) return;
+
+    const fmtT = (o) => o.weight != null && o.weight !== "" ? `${o.sets || 3}×${o.reps || "?"} @ ${fmtNum(o.weight)} ${state.unit}` : "no target";
+    const rowsHtml = changes.map((c) => `
+      <div class="upd-row">
+        <div class="upd-name">${escapeHtml(c.name)}</div>
+        <div class="upd-vals"><span class="upd-old">${escapeHtml(fmtT(c.old))}</span><span class="upd-arrow">→</span><span class="upd-new">${escapeHtml(fmtT(c.next))}</span></div>
+      </div>`).join("");
+
+    openSheet(`
+      <div class="sheet-title"><h3>Update template?</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <p class="muted" style="margin-bottom:12px;">Save today's numbers into <strong>${escapeHtml(t.name)}</strong> so your next guided run starts from here.${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
+      <div class="upd-list">${rowsHtml}</div>
+      <button class="btn btn-primary btn-block" id="updTplBtn" style="margin-top:14px;">Update template</button>
+      <button class="btn btn-ghost btn-block" id="skipUpdTplBtn" style="margin-top:8px;">Keep as is</button>
+    `);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    document.getElementById("skipUpdTplBtn").addEventListener("click", closeSheet);
+    document.getElementById("updTplBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("updTplBtn");
+      btn.disabled = true; btn.textContent = "Saving…";
+      try {
+        if (t.isCustom) {
+          const updated = await db.updateTemplate(t.id, t.name, t.exerciseIds, newTargets);
+          const idx = state.templates.findIndex((x) => x.id === t.id);
+          if (idx > -1) state.templates[idx] = updated;
+        } else {
+          // Built-ins live in code, so save a personal copy and swap it in
+          // for the original (keeping its pin), rather than ending up with
+          // two "Push Day"s side by side.
+          const created = await db.addTemplate(user.id, t.name, t.exerciseIds, newTargets);
+          state.templates.push(created);
+          const wasPinned = isPinnedTemplate(t.id);
+          const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
+          if (!hidden.includes(t.id)) hidden.push(t.id);
+          const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
+          const pi = pinned.indexOf(t.id);
+          if (pi > -1) pinned.splice(pi, 1);
+          if (wasPinned) pinned.push(created.id);
+          saveTemplatePrefs();
+        }
+        closeSheet();
+        renderCurrentTab();
+        toast("Template updated");
+      } catch (err) {
+        toast("Couldn't update template: " + (err.message || String(err)));
+        btn.disabled = false; btn.textContent = "Update template";
+      }
+    });
   }
 
   async function finishWorkout() {
@@ -323,6 +395,7 @@ export async function mountApp(root, user) {
       renderTrain();
       renderRestBanner();
       toast("Workout saved");
+      if (a.templateId) offerTemplateUpdate(a.templateId, cleanEx);
     } catch (err) {
       toast("Couldn't save workout — check your connection and try again");
       if (finishBtn) { finishBtn.disabled = false; finishBtn.textContent = "Finish"; }
@@ -387,10 +460,10 @@ export async function mountApp(root, user) {
     const target = ex.target || {};
     const prevBest = bestPr(ex.exerciseId);
     const lastSet = ptr.si > 0 ? ex.sets[ptr.si - 1] : null;
-    const defaultW = set.kg != null ? roundDisp(fromKg(set.kg, state.unit))
-      : lastSet && lastSet.kg != null ? roundDisp(fromKg(lastSet.kg, state.unit))
-      : target.weight != null ? target.weight
-      : prevBest ? roundDisp(fromKg(prevBest, state.unit)) : "";
+    const defaultW = set.kg != null ? fmtNum(fromKg(set.kg, state.unit))
+      : lastSet && lastSet.kg != null ? fmtNum(fromKg(lastSet.kg, state.unit))
+      : target.weight != null && target.weight !== "" ? fmtNum(target.weight)
+      : prevBest ? fmtNum(fromKg(prevBest, state.unit)) : "";
     const defaultReps = set.reps != null ? set.reps
       : lastSet && lastSet.reps != null ? lastSet.reps
       : target.reps != null ? target.reps : "";
@@ -399,14 +472,14 @@ export async function mountApp(root, user) {
       <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
       <div class="card center">
         <h2 style="font-size:20px; margin-bottom:4px;">${escapeHtml(exName(ex.exerciseId))}</h2>
-        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${target.weight}${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
+        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${fmtNum(target.weight)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
         ${!playerArmed ? `
           <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
           <button class="btn btn-ghost" id="skipSetBtn" style="margin-top:10px;">Skip this set</button>
         ` : `
           <div class="field-row">
-            <div class="field inline"><label>Weight (${state.unit})</label><input type="number" inputmode="decimal" id="playerWeightInput" value="${defaultW}"></div>
-            <div class="field inline"><label>Reps</label><input type="number" inputmode="numeric" id="playerRepsInput" value="${defaultReps}"></div>
+            <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}"></div>
+            <div class="field inline"><label>Reps</label><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" id="playerRepsInput" value="${defaultReps}"></div>
           </div>
           <button class="btn btn-primary btn-block" id="completeSetBtn" style="padding:16px;">✓ Mark Set Done</button>
         `}
@@ -419,7 +492,9 @@ export async function mountApp(root, user) {
     bindGuidedHead(a);
 
     if (!playerArmed) {
-      document.getElementById("playSetBtn").addEventListener("click", () => { playerArmed = true; renderTrain(); });
+      // Starting the next set ends whatever rest/overtime stopwatch was
+      // still running from the previous one.
+      document.getElementById("playSetBtn").addEventListener("click", () => { playerArmed = true; stopRestTimer(); renderTrain(); });
       document.getElementById("skipSetBtn").addEventListener("click", () => {
         set.done = true;
         manualPtr = null;
@@ -428,15 +503,15 @@ export async function mountApp(root, user) {
       });
     } else {
       document.getElementById("completeSetBtn").addEventListener("click", () => {
-        const w = parseFloat(document.getElementById("playerWeightInput").value);
-        const r = parseInt(document.getElementById("playerRepsInput").value, 10);
+        const w = parseNum(document.getElementById("playerWeightInput").value);
+        const r = Math.round(parseNum(document.getElementById("playerRepsInput").value));
         if (isNaN(w) || isNaN(r)) { toast("Enter both weight and reps"); return; }
         const kg = toKg(w, state.unit);
         set.kg = kg; set.reps = r; set.done = true;
         manualPtr = null;
         saveActiveDraft();
-        if (prevBest && kg > prevBest) toast(`New PR — ${roundDisp(w)} ${state.unit}`);
-        else if (prevBest && kg < prevBest) toast(`Logged — your best is ${roundDisp(fromKg(prevBest, state.unit))} ${state.unit}`);
+        if (prevBest && kg > prevBest) toast(`New PR — ${fmtNum(w)} ${state.unit}`);
+        else if (prevBest && kg < prevBest) toast(`Logged — your best is ${fmtNum(fromKg(prevBest, state.unit))} ${state.unit}`);
         else toast("Set logged");
         startRestTimer(target.rest || state.restDuration);
         playerArmed = false;
@@ -470,7 +545,49 @@ export async function mountApp(root, user) {
     });
   }
 
+  // Swipe a pinned template tile right to reveal "Guided" underneath it;
+  // swipe back (or tap anywhere else on the tile) to close. Vertical
+  // scrolling is left to the browser (touch-action: pan-y in CSS).
+  const PIN_OPEN_X = 112;
+  function bindPinSwipe(wrap) {
+    const tile = wrap.querySelector(".pin-tile");
+    let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, moved = false;
+    const isOpen = () => wrap.classList.contains("open");
+    tile.addEventListener("pointerdown", (e) => {
+      startX = e.clientX; startY = e.clientY; dx = 0; dragging = true; decided = false; moved = false;
+    });
+    tile.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const mx = e.clientX - startX, my = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+        decided = true;
+        if (Math.abs(my) > Math.abs(mx)) { dragging = false; return; } // vertical scroll — let it go
+        try { tile.setPointerCapture(e.pointerId); } catch (err) {}
+        wrap.classList.add("dragging");
+      }
+      moved = true;
+      dx = Math.max(0, Math.min(PIN_OPEN_X + 20, (isOpen() ? PIN_OPEN_X : 0) + mx));
+      tile.style.transform = `translateX(${dx}px)`;
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      wrap.classList.remove("dragging");
+      tile.style.transform = "";
+      if (moved) wrap.classList.toggle("open", dx > PIN_OPEN_X / 2);
+    };
+    tile.addEventListener("pointerup", end);
+    tile.addEventListener("pointercancel", end);
+    // A drag shouldn't also count as tapping Start; a tap on an open tile closes it.
+    tile.addEventListener("click", (e) => {
+      if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; return; }
+      if (isOpen()) { e.stopPropagation(); e.preventDefault(); wrap.classList.remove("open"); }
+    }, true);
+  }
+
   let elapsedTimerHandle = null;
+  let mvDays = 30; // home-screen volume chart range: 30 = last 30 days, 0 = all time
   function renderTrain() {
     const el = document.getElementById("tab-train");
     if (state.active && state.active.guided) { renderGuidedPlayer(el, state.active); return; }
@@ -479,13 +596,19 @@ export async function mountApp(root, user) {
       const pinnedHtml = pinnedTpl.length ? `
         <div class="section-label mt">Pinned templates</div>
         ${pinnedTpl.map((t) => `
-          <div class="pin-tile" data-id="${t.id}">
-            <div class="pin-tile-main">
-              <h4>${escapeHtml(t.name)}</h4>
-              <p class="muted">${escapeHtml(t.exerciseIds.slice(0, 3).map(exName).join(", "))}${t.exerciseIds.length > 3 ? ` +${t.exerciseIds.length - 3} more` : ""}</p>
+          <div class="pin-swipe" data-id="${t.id}">
+            <button class="pin-guided" data-id="${t.id}" aria-label="Start ${escapeHtml(t.name)} as a guided workout">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg><span>Guided</span>
+            </button>
+            <div class="pin-tile">
+              <div class="pin-tile-main">
+                <h4>${escapeHtml(t.name)}</h4>
+                <p class="muted">${escapeHtml(t.exerciseIds.slice(0, 3).map(exName).join(", "))}${t.exerciseIds.length > 3 ? ` +${t.exerciseIds.length - 3} more` : ""}</p>
+              </div>
+              <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
             </div>
-            <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
           </div>`).join("")}
+        <p class="pin-hint">Swipe a template right to start it guided</p>
       ` : "";
 
       el.innerHTML = `
@@ -494,6 +617,8 @@ export async function mountApp(root, user) {
           <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
           <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
         </div>
+        <div class="section-label mt">Muscles hit</div>
+        ${muscleChartHtml({ history: state.history, exCat, fromKg, unit: state.unit, days: mvDays })}
         ${pinnedHtml}
         <div class="section-label mt">Jump to</div>
         <div class="home-tiles">
@@ -518,7 +643,18 @@ export async function mountApp(root, user) {
       document.getElementById("homeFriendsTile").addEventListener("click", () => setTab("friends"));
       document.getElementById("homeCalendarTile").addEventListener("click", () => setTab("calendar"));
       document.getElementById("homeProfileTile").addEventListener("click", () => openProfileSheet(ctx));
+      el.querySelectorAll("[data-mv-days]").forEach((b) => b.addEventListener("click", () => {
+        mvDays = parseInt(b.getAttribute("data-mv-days"), 10);
+        renderTrain();
+      }));
       el.querySelectorAll(".pin-start").forEach((b) => b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"))));
+      el.querySelectorAll(".pin-guided").forEach((b) => {
+        b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"), true));
+        // Keyboard users can't swipe: tabbing onto the hidden action opens it.
+        b.addEventListener("focus", () => b.closest(".pin-swipe").classList.add("open"));
+        b.addEventListener("blur", () => b.closest(".pin-swipe").classList.remove("open"));
+      });
+      el.querySelectorAll(".pin-swipe").forEach(bindPinSwipe);
       if (elapsedTimerHandle) { clearInterval(elapsedTimerHandle); elapsedTimerHandle = null; }
       return;
     }
@@ -526,12 +662,12 @@ export async function mountApp(root, user) {
     const a = state.active;
     const exCards = a.exercises.map((ex, exi) => {
       const rows = ex.sets.map((s, si) => {
-        const wDisp = s.kg != null ? roundDisp(fromKg(s.kg, state.unit)) : "";
+        const wDisp = s.kg != null ? fmtNum(fromKg(s.kg, state.unit)) : "";
         return `
           <div class="set-row" data-exi="${exi}" data-si="${si}">
             <div class="set-num">${si + 1}</div>
-            <input type="number" inputmode="decimal" class="set-weight" placeholder="${state.unit}" value="${wDisp === "" ? "" : wDisp}">
-            <input type="number" inputmode="numeric" class="set-reps" placeholder="reps" value="${s.reps != null ? s.reps : ""}">
+            <input type="text" inputmode="decimal" autocomplete="off" class="set-weight" placeholder="${state.unit}" value="${wDisp}">
+            <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="set-reps" placeholder="reps" value="${s.reps != null ? s.reps : ""}">
             <button class="set-done ${s.done ? "on" : ""}" title="Mark done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></button>
             <button class="set-del" title="Delete set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>`;
@@ -597,7 +733,7 @@ export async function mountApp(root, user) {
     el.querySelectorAll(".set-weight").forEach((inp) => inp.addEventListener("input", () => {
       const row = inp.closest(".set-row");
       const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
-      const v = parseFloat(inp.value);
+      const v = parseNum(inp.value);
       a.exercises[exi].sets[si].kg = isNaN(v) ? null : toKg(v, state.unit);
       saveActiveDraft();
     }));
@@ -817,7 +953,7 @@ export async function mountApp(root, user) {
       sessHtml = state.history.map((sess) => {
         const vol = sess.exercises.reduce((sum, ex) => sum + ex.sets.reduce((s2, s) => s2 + (s.kg || 0) * (s.reps || 0), 0), 0);
         const exDetail = sess.exercises.map((ex) => {
-          const setsStr = ex.sets.map((s) => `${roundDisp(fromKg(s.kg, state.unit))}×${s.reps}`).join("  ");
+          const setsStr = ex.sets.map((s) => `${fmtNum(fromKg(s.kg, state.unit))}×${s.reps}`).join("  ");
           return `<div class="session-ex"><div class="exn">${escapeHtml(ex.name)}</div><div class="exs">${setsStr} ${state.unit}</div></div>`;
         }).join("");
         return `
@@ -900,7 +1036,7 @@ export async function mountApp(root, user) {
         return `
           <div class="ex-row" data-id="${e.id}">
             <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
-            <div class="pr">${pr > 0 ? `PR ${roundDisp(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
+            <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
             ${e.isCustom
               ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
               : `<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`}
@@ -1029,7 +1165,7 @@ export async function mountApp(root, user) {
   ctx = {
     user, supabase, db, state,
     toast, openSheet, closeSheet, escapeHtml, uid, byId,
-    fmtDate, fmtShort, fmtDuration, roundDisp, fromKg, toKg,
+    fmtDate, fmtShort, fmtDuration, roundDisp, fromKg, toKg, parseNum, fmtNum,
     exName, exCat,
     setTab, renderCurrentTab,
     openExercisePicker: renderPickerSheet,
