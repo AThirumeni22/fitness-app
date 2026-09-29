@@ -52,13 +52,19 @@ export async function updateProfile(userId, { displayName, avatarUrl } = {}) {
   return data;
 }
 
+// Accepts a File or a Blob (profile.js hands us a resized JPEG Blob, which
+// has no .name). Every upload gets a fresh filename instead of overwriting
+// avatar.jpg: overwriting needs `upsert`, and Supabase Storage only allows
+// an upsert when the bucket also has a SELECT policy, which ours never had
+// — so the old overwrite silently failed and the photo "disappeared".
 export async function uploadAvatar(userId, file) {
-  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-  const path = `${userId}/avatar.${ext}`;
-  const { error } = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
+  const type = file.type || "image/jpeg";
+  const ext = type.split("/")[1] === "png" ? "png" : "jpg";
+  const path = `${userId}/avatar-${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from("avatars").upload(path, file, { contentType: type, upsert: false });
   if (error) throw error;
   const { data } = supabase.storage.from("avatars").getPublicUrl(path);
-  return `${data.publicUrl}?v=${Date.now()}`;
+  return data.publicUrl;
 }
 
 // ================= exercises / templates =================
