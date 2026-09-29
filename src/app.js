@@ -52,12 +52,47 @@ export async function mountApp(root, user) {
     timer: null,
     restDuration: savedRestDuration,
     profile: { displayName: profile.display_name || "", avatarUrl: profile.avatar_url || "" },
+    templatePrefs: Object.assign({ pinned: [], hiddenBuiltin: [] }, profile.template_prefs || {}),
     friends: null
   };
 
   function saveRestDuration(sec) {
     state.restDuration = sec;
     try { localStorage.setItem(REST_KEY, String(sec)); } catch (e) {}
+  }
+
+  function isPinnedTemplate(id) { return (state.templatePrefs.pinned || []).includes(id); }
+  function isHiddenBuiltin(id) { return (state.templatePrefs.hiddenBuiltin || []).includes(id); }
+
+  async function saveTemplatePrefs() {
+    try { await db.updateTemplatePrefs(user.id, state.templatePrefs); }
+    catch (e) { toast("Couldn't save that — try again"); }
+  }
+
+  function togglePinTemplate(id) {
+    const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
+    const i = pinned.indexOf(id);
+    if (i > -1) pinned.splice(i, 1); else pinned.push(id);
+    saveTemplatePrefs();
+    renderCurrentTab();
+  }
+
+  function hideBuiltinTemplate(id) {
+    const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
+    if (!hidden.includes(id)) hidden.push(id);
+    const pinned = state.templatePrefs.pinned || [];
+    const pi = pinned.indexOf(id);
+    if (pi > -1) pinned.splice(pi, 1);
+    saveTemplatePrefs();
+    toast("Hidden — restore anytime from your Profile");
+    renderCurrentTab();
+  }
+
+  function restoreBuiltinTemplates() {
+    state.templatePrefs.hiddenBuiltin = [];
+    saveTemplatePrefs();
+    toast("Default templates restored");
+    renderCurrentTab();
   }
 
   // Shared context handed to the friends/calendar/profile/player modules —
@@ -76,6 +111,15 @@ export async function mountApp(root, user) {
 
   function exName(id) { const e = byId(state.exercises, id); return e ? e.name : "Exercise"; }
   function exCat(id) { const e = byId(state.exercises, id); return e ? e.cat : ""; }
+
+  // Templates with any hidden built-ins filtered out, pinned ones first
+  // (stable otherwise — keeps everyone's existing ordering predictable).
+  function visibleTemplates() {
+    return state.templates
+      .filter((t) => t.isCustom || !isHiddenBuiltin(t.id))
+      .slice()
+      .sort((a, b) => (isPinnedTemplate(b.id) ? 1 : 0) - (isPinnedTemplate(a.id) ? 1 : 0));
+  }
 
   // Matches on name AND equipment/category, so searching "incline chest press
   // machine" finds entries whose machine-ness only shows up in the equipment
@@ -431,12 +475,26 @@ export async function mountApp(root, user) {
     const el = document.getElementById("tab-train");
     if (state.active && state.active.guided) { renderGuidedPlayer(el, state.active); return; }
     if (!state.active) {
+      const pinnedTpl = visibleTemplates().filter((t) => isPinnedTemplate(t.id));
+      const pinnedHtml = pinnedTpl.length ? `
+        <div class="section-label mt">Pinned templates</div>
+        ${pinnedTpl.map((t) => `
+          <div class="pin-tile" data-id="${t.id}">
+            <div class="pin-tile-main">
+              <h4>${escapeHtml(t.name)}</h4>
+              <p class="muted">${escapeHtml(t.exerciseIds.slice(0, 3).map(exName).join(", "))}${t.exerciseIds.length > 3 ? ` +${t.exerciseIds.length - 3} more` : ""}</p>
+            </div>
+            <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
+          </div>`).join("")}
+      ` : "";
+
       el.innerHTML = `
         <div class="card start-card">
           <h2>Ready to train?</h2>
           <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
           <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
         </div>
+        ${pinnedHtml}
         <div class="section-label mt">Jump to</div>
         <div class="home-tiles">
           <button class="home-tile" id="homeFriendsTile">
@@ -460,6 +518,7 @@ export async function mountApp(root, user) {
       document.getElementById("homeFriendsTile").addEventListener("click", () => setTab("friends"));
       document.getElementById("homeCalendarTile").addEventListener("click", () => setTab("calendar"));
       document.getElementById("homeProfileTile").addEventListener("click", () => openProfileSheet(ctx));
+      el.querySelectorAll(".pin-start").forEach((b) => b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"))));
       if (elapsedTimerHandle) { clearInterval(elapsedTimerHandle); elapsedTimerHandle = null; }
       return;
     }
@@ -807,14 +866,21 @@ export async function mountApp(root, user) {
   function renderExercises() {
     const el = document.getElementById("tab-exercises");
 
-    const tplHtml = state.templates.length ? state.templates.map((t) => `
+    const visibleTpl = visibleTemplates();
+    const tplHtml = visibleTpl.length ? visibleTpl.map((t) => {
+      const pinned = isPinnedTemplate(t.id);
+      return `
       <div class="tpl-list-card" style="flex-wrap:wrap;">
         <div class="info"><h4>${escapeHtml(t.name)}</h4><p>${escapeHtml(t.exerciseIds.map(exName).join(", "))}</p></div>
+        <button class="icon-btn pin-tpl ${pinned ? "pinned" : ""}" data-id="${t.id}" title="${pinned ? "Unpin" : "Pin to home screen"}" aria-label="${pinned ? "Unpin template" : "Pin template to home screen"}"><svg viewBox="0 0 24 24" fill="${pinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M12 2l2.9 6.5L22 9.3l-5 4.9 1.2 7.1L12 17.8l-6.2 3.5L7 14.2 2 9.3l7.1-.8L12 2z"/></svg></button>
         <button class="icon-btn run-tpl" data-id="${t.id}" title="Run guided" aria-label="Run guided"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg></button>
         <button class="icon-btn edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
         <button class="btn btn-secondary btn-sm start-tpl2" data-id="${t.id}">Start</button>
-        ${t.isCustom ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
-      </div>`).join('<div style="height:8px"></div>') : '<p class="muted">No templates yet.</p>';
+        ${t.isCustom
+          ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
+          : `<button class="icon-btn hide-tpl" data-id="${t.id}" title="Hide this default template" aria-label="Hide this default template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-10-8-10-8a18.5 18.5 0 015.06-5.94M9.9 4.24A10.4 10.4 0 0112 4c7 0 10 8 10 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><path d="M1 1l22 22"/></svg></button>`}
+      </div>`;
+    }).join('<div style="height:8px"></div>') : '<p class="muted">No templates yet.</p>';
 
     const byCat = {};
     CAT_ORDER.forEach((c) => { byCat[c] = []; });
@@ -849,7 +915,7 @@ export async function mountApp(root, user) {
       ${tplHtml}
       <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;"><h2 style="font-size:19px;">Library</h2>
       <button class="btn btn-secondary btn-sm" id="newExBtn">+ Add Custom</button></div>
-      <input type="text" class="search-input" id="exSearchInput" placeholder="Search 870+ exercises…" value="${escapeHtml(exSearch)}">
+      <input type="text" class="search-input" id="exSearchInput" placeholder="Search 875+ exercises…" value="${escapeHtml(exSearch)}">
       <div class="cat-chip-row">${eqChipsHtml}</div>
       ${groupsHtml || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`}
     `;
@@ -869,6 +935,14 @@ export async function mountApp(root, user) {
     el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
     el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id"), true); setTab("train"); }));
     el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
+    el.querySelectorAll(".pin-tpl").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePinTemplate(b.getAttribute("data-id"));
+    }));
+    el.querySelectorAll(".hide-tpl").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideBuiltinTemplate(b.getAttribute("data-id"));
+    }));
     el.querySelectorAll(".del-tpl").forEach((b) => b.addEventListener("click", async (e) => {
       e.stopPropagation();
       const id = b.getAttribute("data-id");
@@ -960,7 +1034,8 @@ export async function mountApp(root, user) {
     setTab, renderCurrentTab,
     openExercisePicker: renderPickerSheet,
     refreshTopbar,
-    setUnit, saveRestDuration
+    setUnit, saveRestDuration,
+    isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates
   };
 
   /* ---------- init ---------- */
