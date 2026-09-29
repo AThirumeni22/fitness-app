@@ -41,7 +41,7 @@ export function openTemplateEditor(ctx, template) {
               <input type="number" class="t-reps" data-i="${i}" value="${t.reps}" placeholder="—">
             </label>
             <label class="tpl-edit-field">Weight (${state.unit})
-              <input type="number" class="t-weight" data-i="${i}" value="${t.weight}" placeholder="—">
+              <input type="text" inputmode="decimal" autocomplete="off" class="t-weight" data-i="${i}" value="${ctx.fmtNum(t.weight)}" placeholder="—">
             </label>
             <label class="tpl-edit-field">Rest (sec)
               <input type="number" class="t-rest" data-i="${i}" value="${t.rest}" min="0" step="5">
@@ -72,7 +72,8 @@ export function openTemplateEditor(ctx, template) {
         : e.target.classList.contains("t-reps") ? "reps"
         : e.target.classList.contains("t-rest") ? "rest" : "weight";
       const raw = e.target.value;
-      const v = raw === "" ? (field === "sets" ? 3 : field === "rest" ? 90 : null) : Number(raw);
+      const parsed = ctx.parseNum(raw);
+      const v = raw === "" || isNaN(parsed) ? (field === "sets" ? 3 : field === "rest" ? 90 : null) : parsed;
       targets[id] = { ...cur, [field]: v };
     }));
     document.querySelectorAll(".move-up").forEach((b) => b.addEventListener("click", () => {
