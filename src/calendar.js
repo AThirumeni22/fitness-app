@@ -1,7 +1,6 @@
 // Calendar tab: a monthly grid of your + your friends' gym visits, a
-// day-detail sheet (who trained + what split, plus a BeReal-style
-// photo/video feed for that day), and a "propose a time to train" poll
-// with multi-select voting.
+// day-detail sheet (workout cards + a BeReal-style photo/video feed with a
+// full-screen viewer), and "propose a time" sessions friends can join.
 
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -113,13 +112,15 @@ export async function renderCalendar(ctx) {
 
   function renderPlans(plansList) {
     const newBtnHtml = `<button class="btn btn-secondary btn-block" id="newPlanBtn">+ Propose a time</button>`;
-    if (!plansList.length) return `<div class="card"><p class="muted">No sessions proposed yet.</p></div>${newBtnHtml}`;
-    const cardsHtml = plansList.map((p) => {
+    // A proposal disappears on its own once its time has passed — no one
+    // needs to clean up yesterday's "gym at 6?".
+    const upcoming = plansList.filter((p) => p.options[0] && new Date(p.options[0].startsAt).getTime() > Date.now());
+    if (!upcoming.length) return `<div class="card"><p class="muted">No upcoming sessions proposed.</p></div>${newBtnHtml}`;
+    const cardsHtml = upcoming.map((p) => {
       const opt = p.options[0];
-      if (!opt) return "";
       const mine = opt.voterIds.includes(ctx.user.id);
       const names = opt.voterIds.map((id) => nameById[id] || "Someone");
-      return `<div class="plan-card">
+      return `<div class="plan-card${mine ? " joined" : ""}">
         <div class="plan-card-head">
           <div>
             <h4>${ctx.escapeHtml(p.title)}</h4>
@@ -128,7 +129,12 @@ export async function renderCalendar(ctx) {
           </div>
           ${p.creatorId === ctx.user.id ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Delete" aria-label="Delete plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
         </div>
-        <button class="btn ${mine ? "btn-primary" : "btn-secondary"} btn-block join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="${mine ? "1" : "0"}">${mine ? "You're in" : "I'm in"}</button>
+        ${mine ? `
+          <div class="plan-joined-row">
+            <span class="plan-in-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>You're in</span>
+            <button class="btn btn-secondary btn-sm join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="1">Back out</button>
+          </div>` : `
+          <button class="btn btn-primary btn-block join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="0">I'm in</button>`}
         <p class="plan-who muted">${names.length ? ctx.escapeHtml(names.join(", ")) : "No one yet"}</p>
       </div>`;
     }).join("");
@@ -144,6 +150,7 @@ export async function renderCalendar(ctx) {
       try {
         if (mine) await ctx.db.unvoteGymPlanOption(optId, ctx.user.id);
         else await ctx.db.voteGymPlanOption(planId, optId, ctx.user.id);
+        ctx.toast(mine ? "You've backed out" : "You're in");
         renderCalendar(ctx);
       } catch (err) { ctx.toast("Couldn't update your vote"); }
     }));
@@ -215,32 +222,128 @@ function openNewPlanSheet(ctx, onDone) {
   draw();
 }
 
+const CAT_CLASS = { Chest: "c-chest", Back: "c-back", Legs: "c-legs", Shoulders: "c-shoulders", Arms: "c-arms", Core: "c-core" };
+
+function prettyDate(dateKey) {
+  const d = new Date(dateKey + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); // English to match the rest of the UI
+}
+
+// Full-screen, in-app photo/video viewer — tap a tile to open, swipe or use
+// the arrows to move between that day's media, tap outside / X / Esc to
+// close. Nothing is downloaded or saved to the phone's photo library.
+function openLightbox(ctx, items, startIndex) {
+  let i = startIndex;
+  const box = document.createElement("div");
+  box.className = "lightbox";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  document.body.appendChild(box);
+  document.body.style.overflow = "hidden";
+
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    document.body.style.overflow = "";
+    box.remove();
+  }
+  function go(delta) {
+    if (items.length < 2) return;
+    i = (i + delta + items.length) % items.length;
+    draw();
+  }
+  function onKey(e) {
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowRight") go(1);
+    else if (e.key === "ArrowLeft") go(-1);
+  }
+  function draw() {
+    const it = items[i];
+    box.innerHTML = `
+      <button class="lb-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <div class="lb-stage">
+        ${it.mediaType === "video"
+          ? `<video src="${it.mediaUrl}" controls autoplay playsinline></video>`
+          : `<img src="${it.mediaUrl}" alt="Photo from ${ctx.escapeHtml(it.who)}">`}
+      </div>
+      <div class="lb-caption">${ctx.escapeHtml(it.who)}${items.length > 1 ? ` · ${i + 1} / ${items.length}` : ""}</div>
+      ${items.length > 1 ? `
+        <button class="lb-nav lb-prev" aria-label="Previous"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <button class="lb-nav lb-next" aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>` : ""}
+    `;
+    box.querySelector(".lb-close").addEventListener("click", close);
+    const prev = box.querySelector(".lb-prev"), next = box.querySelector(".lb-next");
+    if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); go(-1); });
+    if (next) next.addEventListener("click", (e) => { e.stopPropagation(); go(1); });
+  }
+
+  // Tap the dark backdrop to close; horizontal swipe to change photo.
+  box.addEventListener("click", (e) => { if (e.target === box || e.target.classList.contains("lb-stage")) close(); });
+  let sx = null, sy = null;
+  box.addEventListener("touchstart", (e) => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+  box.addEventListener("touchend", (e) => {
+    if (sx == null) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    sx = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1);
+  });
+  document.addEventListener("keydown", onKey);
+  draw();
+}
+
 function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
   const { openSheet, closeSheet, toast, escapeHtml } = ctx;
+  const unit = ctx.state.unit;
 
-  function splitFor(w) {
-    const cats = [...new Set(w.exercises.map((e) => ctx.exCat(e.exerciseId)).filter(Boolean))];
-    return cats.length ? cats.join(", ") : w.exercises.map((e) => e.name).slice(0, 3).join(", ");
+  function catsFor(w) {
+    return [...new Set(w.exercises.map((e) => ctx.exCat(e.exerciseId)).filter(Boolean))];
+  }
+
+  function workoutCard(w) {
+    const who = nameById[w.userId] || "Someone";
+    const initial = who.trim().charAt(0).toUpperCase() || "?";
+    const sets = w.exercises.reduce((n, e) => n + e.sets.length, 0);
+    const volKg = w.exercises.reduce((n, e) => n + e.sets.reduce((m, st) => m + (st.kg || 0) * (st.reps || 0), 0), 0);
+    const vol = ctx.fromKg(volKg, unit);
+    const volStr = vol >= 1000 ? new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(vol) : Math.round(vol);
+    const cats = catsFor(w);
+    const exRows = w.exercises.map((e) => {
+      const top = e.sets.reduce((b, st) => (!b || st.kg > b.kg ? st : b), null);
+      return `<li><span class="dw-ex">${escapeHtml(e.name)}</span><span class="dw-sets">${e.sets.length} × ${top ? `${ctx.fmtNum(ctx.fromKg(top.kg, unit))} ${unit}` : "—"}</span></li>`;
+    }).join("");
+    return `
+      <article class="dw-card${w.userId === ctx.user.id ? " mine" : ""}">
+        <header class="dw-head">
+          <span class="dw-avatar">${escapeHtml(initial)}</span>
+          <div class="dw-who">
+            <div class="dw-name">${escapeHtml(who)}</div>
+            <div class="dw-cats">${cats.map((c) => `<span class="cat-pill ${CAT_CLASS[c] || ""}">${escapeHtml(c)}</span>`).join("")}</div>
+          </div>
+        </header>
+        <div class="dw-stats">
+          <div><span class="v">${ctx.fmtDuration(w.durationSec)}</span><span class="l">Time</span></div>
+          <div><span class="v">${sets}</span><span class="l">Sets</span></div>
+          <div><span class="v">${volStr}</span><span class="l">Volume (${unit})</span></div>
+        </div>
+        <ul class="dw-list">${exRows}</ul>
+      </article>`;
   }
 
   function draw(posts) {
-    const whoHtml = dayWorkouts.length ? dayWorkouts.map((w) => `
-      <div class="session-ex">
-        <div class="exn">${escapeHtml(nameById[w.userId] || "Someone")} — ${escapeHtml(splitFor(w))}</div>
-        <div class="exs">${escapeHtml(w.exercises.map((e) => e.name).join(", "))}</div>
-      </div>`).join("") : '<p class="muted">No workouts logged this day.</p>';
+    const whoHtml = dayWorkouts.length
+      ? dayWorkouts.map(workoutCard).join("")
+      : '<div class="card"><p class="muted">No workouts logged this day.</p></div>';
 
-    const mediaHtml = posts.length ? `<div class="media-grid">${posts.map((p) => `
-      <div class="media-tile">
-        ${p.mediaType === "video" ? `<video src="${p.mediaUrl}" controls playsinline></video>` : `<img src="${p.mediaUrl}" alt="">`}
+    const mediaHtml = posts.length ? `<div class="media-grid">${posts.map((p, idx) => `
+      <button class="media-tile" data-idx="${idx}" aria-label="Open ${p.mediaType === "video" ? "video" : "photo"} full screen">
+        ${p.mediaType === "video" ? `<video src="${p.mediaUrl}" muted playsinline preload="metadata"></video><span class="media-play">▶</span>` : `<img src="${p.mediaUrl}" alt="">`}
         <span class="media-who">${escapeHtml(nameById[p.userId] || "Someone")}</span>
-      </div>`).join("")}</div>` : '<p class="muted">No photos or videos yet.</p>';
+      </button>`).join("")}</div>` : '<p class="muted">No photos or videos yet.</p>';
 
     openSheet(`
-      <div class="sheet-title"><h3>${escapeHtml(dateKey)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="section-label">Who trained</div>
-      <div class="card" style="margin-bottom:14px;">${whoHtml}</div>
-      <div class="section-label">Photos &amp; Videos</div>
+      <div class="sheet-title"><h3>${escapeHtml(prettyDate(dateKey))}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="section-label">Workouts</div>
+      <div class="dw-stack">${whoHtml}</div>
+      <div class="section-label mt">Photos &amp; Videos</div>
       <div class="card">
         ${mediaHtml}
         <input type="file" id="dayMediaInput" accept="image/*,video/*" hidden>
@@ -248,6 +351,8 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
       </div>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    const lbItems = posts.map((p) => ({ ...p, who: nameById[p.userId] || "Someone" }));
+    document.querySelectorAll(".media-tile[data-idx]").forEach((t) => t.addEventListener("click", () => openLightbox(ctx, lbItems, parseInt(t.getAttribute("data-idx"), 10))));
     document.getElementById("addMediaBtn").addEventListener("click", () => document.getElementById("dayMediaInput").click());
     document.getElementById("dayMediaInput").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
