@@ -29,6 +29,11 @@ no server to run yourself.
    [`supabase/migration_3_plan_template.sql`](./supabase/migration_3_plan_template.sql).
    This just adds one column (an optional template name on a proposed gym
    session) — run it once, after migration_2_social.sql.
+2d. Run a fourth query with the contents of
+   [`supabase/migration_4_template_prefs.sql`](./supabase/migration_4_template_prefs.sql).
+   This adds one more column that stores which templates someone's pinned
+   and which built-in templates they've hidden — run it once, after
+   migration_3_plan_template.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -86,6 +91,18 @@ which is: read and write your own rows, never anyone else's.
   They get a pending request and accept it from their own Friends tab; from
   then on you can each see the other's workouts, calendar days, and any
   gym-time polls the other creates.
+- **Recent activity** — the top of the Friends tab is a feed of your and
+  your friends' workouts from the last three weeks (exercises, set count,
+  duration, newest first). This is just a dedicated place to see the
+  visibility that already existed via Row Level Security — there's no
+  separate "share" step; finishing a workout is what makes it show up.
+- **Pin templates** — the star icon on any template (Exercises tab) pins
+  it as a quick-start tile at the top of the Train tab home screen, above
+  "Jump to." Handy for the 1-2 templates you actually run every week.
+- **Hide default templates** — the crossed-out-eye icon on Push/Pull/Leg
+  Day (Exercises tab) hides that one from your list; nothing is deleted,
+  and "Restore hidden default templates" in Profile settings brings them
+  all back if you change your mind.
 - **Calendar** — a monthly grid of your + your friends' training days (a
   dot for you, a different dot for a friend, a camera glyph for a day with
   photos/videos). Tap a day to see who trained and what they hit, plus a
@@ -152,6 +169,7 @@ supabase/
   schema.sql                    Base schema + Row Level Security policies
   migration_2_social.sql        Friends, calendar/day-posts, gym-time polls, storage buckets
   migration_3_plan_template.sql Adds an optional template name to proposed gym sessions
+  migration_4_template_prefs.sql Adds pinned/hidden template preferences per profile
 ```
 
 ## Local development notes
