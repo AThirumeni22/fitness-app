@@ -1,4 +1,4 @@
-import { fromKg, roundDisp, fmtShort } from "./utils.js";
+import { fromKg, fmtNum, fmtShort } from "./utils.js";
 
 // Renders a small SVG line chart of `points` ([{date, value(kg)}, ...])
 // into `container`, with a hover/tap tooltip. `metric` is "weight" or
@@ -63,7 +63,7 @@ export function drawChart(container, points, metric, unit) {
 
   function showTip(i) {
     const p = points[i];
-    const val = roundDisp(fromKg(p.value, unit));
+    const val = fmtNum(fromKg(p.value, unit));
     tip.textContent = `${fmtShort(p.date)} · ${val}${metric === "weight" ? " " + unit : " " + unit + " vol"}`;
     const rect = container.getBoundingClientRect();
     const svgRect = svgEl.getBoundingClientRect();
