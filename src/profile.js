@@ -124,7 +124,11 @@ export function openProfileSheet(ctx) {
       try {
         avatarUrl = await ctx.db.uploadAvatar(user.id, pendingFile);
       } catch (err) {
-        toast("Couldn't upload photo: " + (err.message || String(err)) + " — saving name anyway");
+        // Keep the sheet open with the preview so it's obvious the photo
+        // didn't go through, instead of closing and silently reverting.
+        toast("Couldn't upload photo: " + (err.message || String(err)));
+        btn.disabled = false; btn.textContent = "Save";
+        return;
       }
     }
 
