@@ -19,6 +19,29 @@ export function roundDisp(n) {
   return Math.round(n * 10) / 10;
 }
 
+// Weight entry has to work the same whether the phone's keypad gives you a
+// comma (NL/most of Europe) or a dot (US/UK). Inputs are plain text with
+// inputmode="decimal" — type="number" silently rejects a comma in some
+// browsers — and we accept either separator when reading them back.
+export const DEC_SEP = (() => {
+  try { return new Intl.NumberFormat().format(1.5).replace(/\d/g, "") || "."; } catch (e) { return "."; }
+})();
+
+export function parseNum(v) {
+  if (v == null) return NaN;
+  const s = String(v).trim().replace(/\s/g, "").replace(",", ".");
+  if (s === "" || !/^-?\d*\.?\d*$/.test(s)) return NaN;
+  return parseFloat(s);
+}
+
+// Formats a number with at most one decimal, using this device's decimal
+// separator — so what you see matches what your keypad types.
+export function fmtNum(n) {
+  if (n == null || n === "" || isNaN(n)) return "";
+  const r = Math.round(Number(n) * 10) / 10;
+  return String(r).replace(".", DEC_SEP);
+}
+
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
