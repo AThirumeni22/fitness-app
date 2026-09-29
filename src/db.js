@@ -10,7 +10,7 @@ import { supabase } from "./supabaseClient.js";
 export async function getProfile(userId) {
   const { data, error } = await supabase
     .from("profiles")
-    .select("unit, display_name, avatar_url")
+    .select("unit, display_name, avatar_url, template_prefs")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -18,7 +18,7 @@ export async function getProfile(userId) {
     const { data: created, error: insertErr } = await supabase
       .from("profiles")
       .insert({ id: userId, unit: "kg" })
-      .select("unit, display_name, avatar_url")
+      .select("unit, display_name, avatar_url, template_prefs")
       .single();
     if (insertErr) throw insertErr;
     return created;
@@ -28,6 +28,14 @@ export async function getProfile(userId) {
 
 export async function setUnit(userId, unit) {
   const { error } = await supabase.from("profiles").upsert({ id: userId, unit });
+  if (error) throw error;
+}
+
+// Pinned template ids (shown as quick-start tiles on the home screen) and
+// hidden built-in template ids (Push/Pull/Leg Day someone doesn't want to
+// see), stored together as one small jsonb blob per profile.
+export async function updateTemplatePrefs(userId, prefs) {
+  const { error } = await supabase.from("profiles").upsert({ id: userId, template_prefs: prefs || {} });
   if (error) throw error;
 }
 
