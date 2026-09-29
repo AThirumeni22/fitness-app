@@ -2,6 +2,9 @@
 // ctx is built once in app.js and passed to every render call; see the
 // "shared ctx" comment near the top of app.js for what it carries.
 
+const FEED_DAYS = 21;
+const FEED_LIMIT = 15;
+
 export async function renderFriends(ctx) {
   const { toast, escapeHtml } = ctx;
   const el = document.getElementById("tab-friends");
@@ -17,8 +20,49 @@ export async function renderFriends(ctx) {
     return;
   }
 
+  // Friends can already read each other's workouts (see "workouts: friends
+  // can read" in migration_2_social.sql) — this just gives that visibility
+  // an actual place to show up, instead of only surfacing one day at a
+  // time in the Calendar's day-detail view.
+  const friendIds = data.accepted.map((r) => r.otherId);
+  let feed = [];
+  if (friendIds.length) {
+    try {
+      const since = new Date(Date.now() - FEED_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const rows = await ctx.db.listWorkoutsInRange([ctx.user.id, ...friendIds], since, until);
+      const nameById = {};
+      data.accepted.forEach((r) => { nameById[r.otherId] = r.otherProfile; });
+      feed = rows
+        .slice()
+        .reverse()
+        .slice(0, FEED_LIMIT)
+        .map((w) => ({
+          ...w,
+          who: w.userId === ctx.user.id ? "You" : nameFor(nameById[w.userId])
+        }));
+    } catch (err) {
+      feed = [];
+    }
+  }
+
   function nameFor(p) {
     return p && p.display_name ? escapeHtml(p.display_name) : "Someone (hasn't set a name yet)";
+  }
+
+  function feedCard(w) {
+    const names = w.exercises.map((e) => e.name);
+    const summary = names.slice(0, 3).join(", ") + (names.length > 3 ? ` +${names.length - 3} more` : "");
+    const totalSets = w.exercises.reduce((n, e) => n + e.sets.length, 0);
+    return `
+      <div class="feed-card">
+        <div class="feed-card-head">
+          <span class="feed-who">${w.who === "You" ? "You" : w.who}</span>
+          <span class="feed-when">${ctx.fmtDate(w.date)}</span>
+        </div>
+        <p class="feed-summary">${escapeHtml(summary || "Workout")}</p>
+        <p class="feed-meta muted">${totalSets} set${totalSets === 1 ? "" : "s"} · ${ctx.fmtDuration(w.durationSec)}</p>
+      </div>`;
   }
 
   function row(r, actionsHtml, sub) {
@@ -49,7 +93,13 @@ export async function renderFriends(ctx) {
           "Friends")).join('<div style="height:8px"></div>')
       : '<p class="muted">No friends yet — add one by email below.</p>';
 
+    const feedHtml = data.accepted.length ? `
+      <div class="section-label">Recent activity</div>
+      ${feed.length ? feed.map(feedCard).join("") : '<div class="card"><p class="muted">No workouts from you or your friends in the last three weeks.</p></div>'}
+    ` : "";
+
     el.innerHTML = `
+      ${feedHtml}
       <div class="card">
         <h2 style="font-size:19px; margin-bottom:10px;">Add a friend</h2>
         <p class="muted" style="margin-bottom:10px;">They need a SocialGym account already — add them by the email they signed up with.</p>
