@@ -1,0 +1,1522 @@
+import { supabase } from "./supabaseClient.js";
+import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary } from "./exercises.js";
+import {
+  uid, byId, toKg, fromKg, roundDisp, parseNum, fmtNum,
+  fmtDate, fmtShort, fmtDuration, fmtClock, fmtElapsed, escapeHtml
+} from "./utils.js";
+import { drawChart } from "./chart.js";
+import * as db from "./db.js";
+import { renderFriends } from "./friends.js";
+import { renderCalendar } from "./calendar.js";
+import { openProfileSheet } from "./profile.js";
+import { openTemplateEditor } from "./player.js";
+import { muscleChartHtml } from "./musclechart.js";
+import { needsOnboarding, runOnboarding, openPrivacySheet } from "./onboarding.js";
+
+export async function mountApp(root, user) {
+  root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
+
+  let profile, customExercises, templates, history, library;
+  try {
+    [profile, customExercises, templates, history, library] = await Promise.all([
+      db.getProfile(user.id),
+      db.listCustomExercises(user.id),
+      db.listTemplates(user.id),
+      db.listWorkouts(user.id),
+      fetchExerciseLibrary()
+    ]);
+  } catch (err) {
+    root.innerHTML = `<div class="boot-loading err"><p>Couldn't load your data: ${escapeHtml(err.message || String(err))}</p><button class="btn btn-secondary" id="retryBtn">Retry</button></div>`;
+    root.querySelector("#retryBtn").addEventListener("click", () => mountApp(root, user));
+    return;
+  }
+
+  // First sign-in (no name yet) or privacy notice not yet accepted: run the
+  // welcome flow before showing the app. It resolves once both are saved.
+  if (needsOnboarding(profile, user)) {
+    profile = await runOnboarding(root, user, profile, db);
+  }
+
+  const ACTIVE_KEY = `trainlog.active.${user.id}`;
+  let activeDraft = null;
+  try {
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    if (raw) activeDraft = JSON.parse(raw);
+  } catch (e) { activeDraft = null; }
+
+  const REST_KEY = `trainlog.restDuration.${user.id}`;
+  let savedRestDuration = 90;
+  try {
+    const v = parseInt(localStorage.getItem(REST_KEY), 10);
+    if (v > 0) savedRestDuration = v;
+  } catch (e) {}
+
+  const state = {
+    unit: profile.unit === "lb" ? "lb" : "kg",
+    exercises: library.concat(customExercises),
+    templates: DEFAULT_TEMPLATES.concat(templates),
+    history,
+    active: activeDraft,
+    timer: null,
+    restDuration: savedRestDuration,
+    profile: { displayName: profile.display_name || "", avatarUrl: profile.avatar_url || "" },
+    templatePrefs: Object.assign({ pinned: [], hiddenBuiltin: [] }, profile.template_prefs || {}),
+    friends: null,
+    shares: []
+  };
+
+  function saveRestDuration(sec) {
+    state.restDuration = sec;
+    try { localStorage.setItem(REST_KEY, String(sec)); } catch (e) {}
+  }
+
+  function isPinnedTemplate(id) { return (state.templatePrefs.pinned || []).includes(id); }
+  function isHiddenBuiltin(id) { return (state.templatePrefs.hiddenBuiltin || []).includes(id); }
+
+  async function saveTemplatePrefs() {
+    try { await db.updateTemplatePrefs(user.id, state.templatePrefs); }
+    catch (e) { toast("Couldn't save that — try again"); }
+  }
+
+  function togglePinTemplate(id) {
+    const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
+    const i = pinned.indexOf(id);
+    if (i > -1) pinned.splice(i, 1); else pinned.push(id);
+    saveTemplatePrefs();
+    renderCurrentTab();
+  }
+
+  function hideBuiltinTemplate(id) {
+    const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
+    if (!hidden.includes(id)) hidden.push(id);
+    const pinned = state.templatePrefs.pinned || [];
+    const pi = pinned.indexOf(id);
+    if (pi > -1) pinned.splice(pi, 1);
+    saveTemplatePrefs();
+    toast("Hidden — restore anytime from your Profile");
+    renderCurrentTab();
+  }
+
+  function restoreBuiltinTemplates() {
+    state.templatePrefs.hiddenBuiltin = [];
+    saveTemplatePrefs();
+    toast("Default templates restored");
+    renderCurrentTab();
+  }
+
+  // Shared context handed to the friends/calendar/profile/player modules —
+  // assigned once every function below exists (see bottom of mountApp).
+  // Referencing `ctx` inside a listener attached before that point is safe:
+  // the listener only reads it when it actually fires, well after this
+  // synchronous setup has finished and `ctx` has been assigned.
+  let ctx;
+
+  function saveActiveDraft() {
+    try {
+      if (state.active) localStorage.setItem(ACTIVE_KEY, JSON.stringify(state.active));
+      else localStorage.removeItem(ACTIVE_KEY);
+    } catch (e) {}
+  }
+
+  function exName(id) { const e = byId(state.exercises, id); return e ? e.name : "Exercise"; }
+  function exCat(id) { const e = byId(state.exercises, id); return e ? e.cat : ""; }
+
+  // Templates with any hidden built-ins filtered out, pinned ones first
+  // (stable otherwise — keeps everyone's existing ordering predictable).
+  function visibleTemplates() {
+    return state.templates
+      .filter((t) => t.isCustom || !isHiddenBuiltin(t.id))
+      .slice()
+      .sort((a, b) => (isPinnedTemplate(b.id) ? 1 : 0) - (isPinnedTemplate(a.id) ? 1 : 0));
+  }
+
+  // Matches on name AND equipment/category, so searching "incline chest press
+  // machine" finds entries whose machine-ness only shows up in the equipment
+  // field (e.g. "Leverage Incline Chest Press", equipment: "machine").
+  function matchesSearch(e, q) {
+    if (!q) return true;
+    const hay = `${e.name} ${e.equipment || ""} ${e.cat || ""}`.toLowerCase();
+    return q.split(/\s+/).filter(Boolean).every((term) => hay.indexOf(term) > -1);
+  }
+
+  function toast(msg) {
+    const t = document.getElementById("toast");
+    if (!t) return;
+    t.textContent = msg;
+    clearTimeout(toast._h); clearTimeout(toast._h2);
+    t.classList.remove("leaving");
+    // replay the entrance when a new message replaces a visible one
+    t.style.animation = "none"; void t.offsetWidth; t.style.animation = "";
+    t.hidden = false;
+    toast._h = setTimeout(() => {
+      t.classList.add("leaving");
+      toast._h2 = setTimeout(() => { t.hidden = true; t.classList.remove("leaving"); }, 220);
+    }, 2200);
+  }
+
+  function avatarHtml() {
+    if (state.profile.avatarUrl) return `<img src="${state.profile.avatarUrl}">`;
+    const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
+    return escapeHtml(initial);
+  }
+  function refreshTopbar() {
+    const a = document.getElementById("topbarAvatar");
+    if (a) a.innerHTML = avatarHtml();
+  }
+
+  root.innerHTML = `
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark">Obonto</span>
+          <span class="tag" id="dateTag">—</span>
+        </div>
+        <div class="actions">
+          <button class="chip-btn" id="profileBtn" title="Your profile" aria-label="Your profile">
+            <span id="topbarAvatar" class="avatar-sm">${avatarHtml()}</span>
+          </button>
+          <button class="chip-btn" id="signOutBtn" title="Sign out" aria-label="Sign out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <section id="tab-train" class="tab"></section>
+        <section id="tab-history" class="tab" hidden></section>
+        <section id="tab-exercises" class="tab" hidden></section>
+        <section id="tab-friends" class="tab" hidden></section>
+        <section id="tab-calendar" class="tab" hidden></section>
+      </main>
+
+      <div class="rest-banner" id="restBanner" hidden></div>
+
+      <nav class="tabbar">
+        <button data-tab="train" class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 6.5l11 11M4 9l5-5 2 2-5 5-2-2zm9 9l5-5 2 2-5 5-2-2zM2 21l3-3M18.5 5.5L21 3"/></svg>
+          <span>Train</span>
+        </button>
+        <button data-tab="history">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+          <span>History</span>
+        </button>
+        <button data-tab="exercises">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          <span>Exercises</span>
+        </button>
+        <button data-tab="friends">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          <span>Friends</span>
+        </button>
+        <button data-tab="calendar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <span>Calendar</span>
+        </button>
+      </nav>
+
+      <div class="sheet" id="sheet" hidden><div class="sheet-inner" id="sheetInner"></div></div>
+      <div class="toast" id="toast" hidden></div>
+    </div>
+  `;
+
+  document.getElementById("sheet").addEventListener("click", (e) => {
+    if (e.target.id === "sheet") closeSheet();
+  });
+  bindSheetDrag();
+  async function setUnit(unit) {
+    if (unit === state.unit) return;
+    state.unit = unit;
+    renderCurrentTab();
+    try { await db.setUnit(user.id, state.unit); } catch (e) { toast("Couldn't save unit preference"); }
+  }
+  document.getElementById("signOutBtn").addEventListener("click", async () => {
+    await supabase.auth.signOut();
+  });
+  document.getElementById("profileBtn").addEventListener("click", () => openProfileSheet(ctx));
+  document.querySelectorAll(".tabbar button").forEach((b) => {
+    b.addEventListener("click", () => setTab(b.getAttribute("data-tab")));
+  });
+
+  let activeDetailInterval = null;
+
+  // While a sheet is open the page behind it must not move. Plain
+  // `overflow:hidden` isn't enough on iOS Safari, so the body is pinned with
+  // position:fixed at the current scroll offset and restored on close.
+  let lockedScrollY = 0;
+  function lockScroll() {
+    if (document.body.classList.contains("scroll-locked")) return;
+    lockedScrollY = window.scrollY;
+    document.body.style.top = `-${lockedScrollY}px`;
+    document.body.classList.add("scroll-locked");
+  }
+  function unlockScroll() {
+    if (!document.body.classList.contains("scroll-locked")) return;
+    document.body.classList.remove("scroll-locked");
+    document.body.style.top = "";
+    window.scrollTo(0, lockedScrollY);
+  }
+
+  function openSheet(html) {
+    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
+    const sh = document.getElementById("sheet");
+    const inner = document.getElementById("sheetInner");
+    const wasOpen = !sh.hidden && !sh.classList.contains("closing");
+    inner.innerHTML = '<div class="sheet-handle" aria-hidden="true"></div>' + html;
+    clearTimeout(closeSheet._h);
+    sh.classList.remove("closing");
+    inner.style.transform = "";
+    // swapping content inside an already-open sheet shouldn't replay the slide-up
+    if (wasOpen) inner.style.animation = "none"; else inner.style.animation = "";
+    if (!wasOpen) inner.scrollTop = 0;
+    sh.hidden = false;
+    lockScroll();
+  }
+  function closeSheet() {
+    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
+    const sh = document.getElementById("sheet");
+    if (sh.hidden || sh.classList.contains("closing")) return;
+    // let the sheet slide away before hiding it
+    sh.classList.add("closing");
+    clearTimeout(closeSheet._h);
+    closeSheet._h = setTimeout(() => {
+      sh.hidden = true;
+      sh.classList.remove("closing");
+      document.getElementById("sheetInner").style.transform = "";
+      unlockScroll();
+    }, 220);
+    unlockScrollSoon();
+  }
+  // Give the page its scroll back right away so a quick tap after closing works.
+  function unlockScrollSoon() { requestAnimationFrame(unlockScroll); }
+
+  // Pull the sheet down to dismiss it: from the handle/title anywhere, or
+  // from the content once it's scrolled to the top. Uses touch events so
+  // the drag can claim the gesture (preventDefault) before the page or the
+  // sheet's own content starts scrolling.
+  function bindSheetDrag() {
+    const inner = document.getElementById("sheetInner");
+    let startY = 0, lastY = 0, lastT = 0, vel = 0, dy = 0, dragging = false, armed = false;
+    inner.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.target;
+      const onGrip = !!(t.closest && t.closest(".sheet-handle, .sheet-title")) && !(t.closest && t.closest("button, input, select, textarea"));
+      armed = onGrip || inner.scrollTop <= 0;
+      if (!armed) return;
+      startY = lastY = e.touches[0].clientY; lastT = performance.now();
+      dy = 0; vel = 0; dragging = false;
+      inner._onGrip = onGrip;
+    }, { passive: true });
+    inner.addEventListener("touchmove", (e) => {
+      if (!armed) return;
+      const y = e.touches[0].clientY;
+      const move = y - startY;
+      if (!dragging) {
+        if (move > 6 && (inner._onGrip || inner.scrollTop <= 0)) {
+          dragging = true;
+          inner.classList.add("dragging");
+        } else if (move < -6 && !inner._onGrip) { armed = false; return; }
+        else return;
+      }
+      e.preventDefault();
+      const now = performance.now();
+      vel = (y - lastY) / Math.max(1, now - lastT);
+      lastY = y; lastT = now;
+      dy = Math.max(0, move);
+      inner.style.transform = `translateY(${dy}px)`;
+    }, { passive: false });
+    const end = () => {
+      if (!dragging) { armed = false; return; }
+      dragging = false; armed = false;
+      inner.classList.remove("dragging");
+      if (dy > Math.min(140, inner.offsetHeight * 0.3) || vel > 0.6) {
+        closeSheet();
+      } else {
+        inner.classList.add("snap");
+        inner.style.transform = "";
+        setTimeout(() => inner.classList.remove("snap"), 300);
+      }
+    };
+    inner.addEventListener("touchend", end);
+    inner.addEventListener("touchcancel", end);
+  }
+
+  let currentTab = "train";
+  function setTab(tab) {
+    currentTab = tab;
+    ["train", "history", "exercises", "friends", "calendar"].forEach((t) => { document.getElementById("tab-" + t).hidden = (t !== tab); });
+    document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("active", b.getAttribute("data-tab") === tab));
+    window.scrollTo(0, 0);
+    renderCurrentTab();
+    if (tab === "exercises") refreshShares(true);
+  }
+  function renderCurrentTab() {
+    if (currentTab === "train") renderTrain();
+    else if (currentTab === "history") renderHistory();
+    else if (currentTab === "exercises") renderExercises();
+    else if (currentTab === "friends") renderFriends(ctx);
+    else if (currentTab === "calendar") renderCalendar(ctx);
+    renderRestBanner();
+  }
+
+  /* ================= TRAIN ================= */
+  let playerArmed = false;
+  let manualPtr = null;
+
+  function startWorkout(templateId, guided) {
+    let exList = [];
+    if (templateId) {
+      const t = byId(state.templates, templateId);
+      if (t) {
+        if (guided) {
+          exList = t.exerciseIds.map((id) => {
+            const tg = (t.targets && t.targets[id]) || {};
+            const n = tg.sets || 3;
+            return {
+              exerciseId: id,
+              target: { sets: n, reps: tg.reps || null, weight: tg.weight || null, rest: tg.rest || state.restDuration },
+              sets: Array.from({ length: n }, () => ({ kg: null, reps: null, done: false }))
+            };
+          });
+        } else {
+          exList = t.exerciseIds.map((id) => {
+            const tg = (t.targets && t.targets[id]) || {};
+            return { exerciseId: id, restSec: tg.rest || null, sets: [{ kg: null, reps: null, done: false }] };
+          });
+        }
+      }
+    }
+    playerArmed = false;
+    manualPtr = null;
+    state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided, templateId: templateId || null };
+    saveActiveDraft();
+    renderTrain();
+    toast(templateId ? (guided ? "Guided workout started" : "Workout started") : "Empty workout started");
+  }
+
+  // After a template-based workout: offer to write today's numbers back into
+  // the template so next time's guided targets start from where you left off.
+  // Per exercise we take the heaviest logged set (reps from that same set)
+  // and the number of sets you actually logged; rest time is left alone.
+  function offerTemplateUpdate(templateId, cleanEx) {
+    const t = byId(state.templates, templateId);
+    if (!t) return;
+    const newTargets = { ...(t.targets || {}) };
+    const changes = [];
+    cleanEx.forEach((ex) => {
+      if (!t.exerciseIds.includes(ex.exerciseId)) return;
+      const top = ex.sets.reduce((best, st) => (!best || st.kg > best.kg || (st.kg === best.kg && st.reps > best.reps) ? st : best), null);
+      if (!top) return;
+      const old = newTargets[ex.exerciseId] || {};
+      const next = { ...old, sets: ex.sets.length, reps: top.reps, weight: roundDisp(fromKg(top.kg, state.unit)) };
+      if (next.sets !== (old.sets || 3) || next.reps !== old.reps || next.weight !== old.weight) {
+        changes.push({ name: ex.name, old, next });
+        newTargets[ex.exerciseId] = next;
+      }
+    });
+    if (!changes.length) return;
+
+    const fmtT = (o) => o.weight != null && o.weight !== "" ? `${o.sets || 3}×${o.reps || "?"} @ ${fmtNum(o.weight)} ${state.unit}` : "no target";
+    const rowsHtml = changes.map((c) => `
+      <div class="upd-row">
+        <div class="upd-name">${escapeHtml(c.name)}</div>
+        <div class="upd-vals"><span class="upd-old">${escapeHtml(fmtT(c.old))}</span><span class="upd-arrow">→</span><span class="upd-new">${escapeHtml(fmtT(c.next))}</span></div>
+      </div>`).join("");
+
+    openSheet(`
+      <div class="sheet-title"><h3>Update template?</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <p class="muted">Save today's numbers into <strong>${escapeHtml(t.name)}</strong> so your next guided run starts from here.${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
+      <div class="upd-list">${rowsHtml}</div>
+      <button class="btn btn-primary btn-block" id="updTplBtn">Update template</button>
+      <button class="btn btn-ghost btn-block" id="skipUpdTplBtn">Keep as is</button>
+    `);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    document.getElementById("skipUpdTplBtn").addEventListener("click", closeSheet);
+    document.getElementById("updTplBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("updTplBtn");
+      btn.disabled = true; btn.textContent = "Saving…";
+      try {
+        if (t.isCustom) {
+          const updated = await db.updateTemplate(t.id, t.name, t.exerciseIds, newTargets);
+          const idx = state.templates.findIndex((x) => x.id === t.id);
+          if (idx > -1) state.templates[idx] = updated;
+        } else {
+          // Built-ins live in code, so save a personal copy and swap it in
+          // for the original (keeping its pin), rather than ending up with
+          // two "Push Day"s side by side.
+          const created = await db.addTemplate(user.id, t.name, t.exerciseIds, newTargets);
+          state.templates.push(created);
+          const wasPinned = isPinnedTemplate(t.id);
+          const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
+          if (!hidden.includes(t.id)) hidden.push(t.id);
+          const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
+          const pi = pinned.indexOf(t.id);
+          if (pi > -1) pinned.splice(pi, 1);
+          if (wasPinned) pinned.push(created.id);
+          saveTemplatePrefs();
+        }
+        closeSheet();
+        renderCurrentTab();
+        toast("Template updated");
+      } catch (err) {
+        toast("Couldn't update template: " + (err.message || String(err)));
+        btn.disabled = false; btn.textContent = "Update template";
+      }
+    });
+  }
+
+  async function finishWorkout() {
+    const a = state.active;
+    if (!a) return;
+    const cleanEx = a.exercises
+      .map((ex) => ({
+        exerciseId: ex.exerciseId,
+        name: exName(ex.exerciseId),
+        sets: ex.sets.filter((s) => s.kg != null && s.reps != null)
+      }))
+      .filter((ex) => ex.sets.length > 0);
+
+    if (cleanEx.length === 0) {
+      state.active = null;
+      state.timer = null;
+      playerArmed = false; manualPtr = null;
+      saveActiveDraft();
+      renderTrain();
+      renderRestBanner();
+      toast("Workout discarded — no sets logged");
+      return;
+    }
+
+    const finishBtn = document.getElementById("finishBtn");
+    if (finishBtn) { finishBtn.disabled = true; finishBtn.textContent = "Saving…"; }
+
+    const workout = {
+      date: new Date(a.startedAt).toISOString(),
+      durationSec: Math.round((Date.now() - a.startedAt) / 1000),
+      exercises: cleanEx
+    };
+    try {
+      await db.saveWorkout(user.id, workout);
+      state.history.unshift({ id: uid(), ...workout });
+      state.active = null;
+      state.timer = null;
+      playerArmed = false; manualPtr = null;
+      saveActiveDraft();
+      renderTrain();
+      renderRestBanner();
+      toast("Workout saved");
+      if (a.templateId) offerTemplateUpdate(a.templateId, cleanEx);
+    } catch (err) {
+      toast("Couldn't save workout — check your connection and try again");
+      if (finishBtn) { finishBtn.disabled = false; finishBtn.textContent = "Finish"; }
+    }
+  }
+
+  function discardWorkout() {
+    state.active = null;
+    state.timer = null;
+    playerArmed = false; manualPtr = null;
+    saveActiveDraft();
+    renderTrain();
+    renderRestBanner();
+    toast("Workout discarded");
+  }
+
+  function currentPointer(a) {
+    for (let exi = 0; exi < a.exercises.length; exi++) {
+      const sets = a.exercises[exi].sets;
+      for (let si = 0; si < sets.length; si++) {
+        if (!sets[si].done) return { exi, si };
+      }
+    }
+    return null;
+  }
+
+  function jumpToExercise(a, exi) {
+    const sets = a.exercises[exi].sets;
+    let si = sets.findIndex((s) => !s.done);
+    if (si === -1) si = 0;
+    manualPtr = { exi, si };
+    playerArmed = false;
+    renderTrain();
+  }
+
+  function renderGuidedPlayer(el, a) {
+    const ptr = (manualPtr && a.exercises[manualPtr.exi]) ? manualPtr : currentPointer(a);
+    const totalSets = a.exercises.reduce((n, ex) => n + ex.sets.length, 0);
+    const doneSets = a.exercises.reduce((n, ex) => n + ex.sets.filter((s) => s.done).length, 0);
+    const headHtml = `
+      <div class="active-head">
+        <div><div class="elapsed-label">In progress · Guided</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
+        <div class="head-actions">
+          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
+          <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
+        </div>
+      </div>
+      <div id="discardConfirm"></div>`;
+
+    if (!ptr) {
+      el.innerHTML = headHtml + `
+        <div class="card center player-card">
+          <h2>All sets done</h2>
+          <p class="muted">${doneSets} of ${totalSets} sets logged. Tap Finish to save.</p>
+        </div>`;
+      bindGuidedHead(a);
+      return;
+    }
+
+    const ex = a.exercises[ptr.exi];
+    const set = ex.sets[ptr.si];
+    const target = ex.target || {};
+    const prevBest = bestPr(ex.exerciseId);
+    const lastSet = ptr.si > 0 ? ex.sets[ptr.si - 1] : null;
+    const defaultW = set.kg != null ? fmtNum(fromKg(set.kg, state.unit))
+      : lastSet && lastSet.kg != null ? fmtNum(fromKg(lastSet.kg, state.unit))
+      : target.weight != null && target.weight !== "" ? fmtNum(target.weight)
+      : prevBest ? fmtNum(fromKg(prevBest, state.unit)) : "";
+    const defaultReps = set.reps != null ? set.reps
+      : lastSet && lastSet.reps != null ? lastSet.reps
+      : target.reps != null ? target.reps : "";
+
+    el.innerHTML = headHtml + `
+      <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
+      <div class="card center player-card">
+        <div class="stack-sm">
+        <h2>${escapeHtml(exName(ex.exerciseId))}</h2>
+        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${fmtNum(target.weight)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
+        </div>
+        ${!playerArmed ? `
+          <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
+          <button class="btn btn-ghost btn-block" id="skipSetBtn">Skip this set</button>
+        ` : `
+          <div class="field-row">
+            <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}"></div>
+            <div class="field inline"><label>Reps</label><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" id="playerRepsInput" value="${defaultReps}"></div>
+          </div>
+          <button class="btn btn-primary btn-block btn-lg" id="completeSetBtn">✓ Mark Set Done</button>
+        `}
+      </div>
+      <div class="player-actions">
+        <button class="link-btn${ptr.exi === 0 ? " disabled" : ""}" id="prevExBtn"${ptr.exi === 0 ? " disabled" : ""}>← Prev exercise</button>
+        <button class="link-btn${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}" id="nextExBtn"${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}>Next exercise →</button>
+      </div>`;
+
+    bindGuidedHead(a);
+
+    if (!playerArmed) {
+      // Starting the next set ends whatever rest/overtime stopwatch was
+      // still running from the previous one.
+      document.getElementById("playSetBtn").addEventListener("click", () => { playerArmed = true; stopRestTimer(); renderTrain(); });
+      document.getElementById("skipSetBtn").addEventListener("click", () => {
+        set.done = true;
+        manualPtr = null;
+        saveActiveDraft();
+        renderTrain();
+      });
+    } else {
+      document.getElementById("completeSetBtn").addEventListener("click", () => {
+        const w = parseNum(document.getElementById("playerWeightInput").value);
+        const r = Math.round(parseNum(document.getElementById("playerRepsInput").value));
+        if (isNaN(w) || isNaN(r)) { toast("Enter both weight and reps"); return; }
+        const kg = toKg(w, state.unit);
+        set.kg = kg; set.reps = r; set.done = true;
+        manualPtr = null;
+        saveActiveDraft();
+        if (prevBest && kg > prevBest) toast(`New PR — ${fmtNum(w)} ${state.unit}`);
+        else if (prevBest && kg < prevBest) toast(`Logged — your best is ${fmtNum(fromKg(prevBest, state.unit))} ${state.unit}`);
+        else toast("Set logged");
+        startRestTimer(target.rest || state.restDuration);
+        playerArmed = false;
+        renderTrain();
+      });
+    }
+
+    const prevBtn = document.getElementById("prevExBtn");
+    const nextBtn = document.getElementById("nextExBtn");
+    if (prevBtn) prevBtn.addEventListener("click", () => { if (ptr.exi > 0) jumpToExercise(a, ptr.exi - 1); });
+    if (nextBtn) nextBtn.addEventListener("click", () => { if (ptr.exi < a.exercises.length - 1) jumpToExercise(a, ptr.exi + 1); });
+  }
+
+  function bindGuidedHead(a) {
+    function tickElapsed() {
+      const sec = (Date.now() - a.startedAt) / 1000;
+      const el2 = document.getElementById("activeElapsed");
+      if (el2) el2.textContent = fmtElapsed(sec);
+    }
+    tickElapsed();
+    if (elapsedTimerHandle) clearInterval(elapsedTimerHandle);
+    elapsedTimerHandle = setInterval(tickElapsed, 1000);
+    document.getElementById("finishBtn").addEventListener("click", finishWorkout);
+    document.getElementById("discardBtn").addEventListener("click", () => {
+      document.getElementById("discardConfirm").innerHTML = `
+        <div class="confirm-row"><span>Discard this workout?</span><span class="spacer"></span>
+        <button class="btn btn-danger btn-sm" id="confirmDiscard">Discard</button>
+        <button class="btn btn-secondary btn-sm" id="cancelDiscard">Cancel</button></div>`;
+      document.getElementById("confirmDiscard").addEventListener("click", discardWorkout);
+      document.getElementById("cancelDiscard").addEventListener("click", () => { document.getElementById("discardConfirm").innerHTML = ""; });
+    });
+  }
+
+  // Swipe a pinned template tile right to reveal "Guided" underneath it;
+  // swipe back (or tap anywhere else on the tile) to close. Vertical
+  // scrolling is left to the browser (touch-action: pan-y in CSS).
+  const PIN_OPEN_X = 112;
+  function bindPinSwipe(wrap) {
+    const tile = wrap.querySelector(".pin-tile");
+    let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, moved = false;
+    const isOpen = () => wrap.classList.contains("open");
+    tile.addEventListener("pointerdown", (e) => {
+      startX = e.clientX; startY = e.clientY; dx = 0; dragging = true; decided = false; moved = false;
+    });
+    tile.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const mx = e.clientX - startX, my = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+        decided = true;
+        if (Math.abs(my) > Math.abs(mx)) { dragging = false; return; } // vertical scroll — let it go
+        try { tile.setPointerCapture(e.pointerId); } catch (err) {}
+        wrap.classList.add("dragging");
+      }
+      moved = true;
+      dx = Math.max(0, Math.min(PIN_OPEN_X + 20, (isOpen() ? PIN_OPEN_X : 0) + mx));
+      tile.style.transform = `translateX(${dx}px)`;
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      wrap.classList.remove("dragging");
+      tile.style.transform = "";
+      if (moved) wrap.classList.toggle("open", dx > PIN_OPEN_X / 2);
+    };
+    tile.addEventListener("pointerup", end);
+    tile.addEventListener("pointercancel", end);
+    // A drag shouldn't also count as tapping Start; a tap on an open tile closes it.
+    tile.addEventListener("click", (e) => {
+      if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; return; }
+      if (isOpen()) { e.stopPropagation(); e.preventDefault(); wrap.classList.remove("open"); }
+    }, true);
+  }
+
+  let elapsedTimerHandle = null;
+  let mvDays = 30; // home-screen volume chart range: 30 = last 30 days, 0 = all time
+  function renderTrain() {
+    const el = document.getElementById("tab-train");
+    if (state.active && state.active.guided) { renderGuidedPlayer(el, state.active); return; }
+    if (!state.active) {
+      const pinnedTpl = visibleTemplates().filter((t) => isPinnedTemplate(t.id));
+      const pinnedHtml = pinnedTpl.length ? `
+        <div class="section-label">Pinned templates</div>
+        <div class="pin-list">
+        ${pinnedTpl.map((t) => `
+          <div class="pin-swipe" data-id="${t.id}">
+            <button class="pin-guided" data-id="${t.id}" aria-label="Start ${escapeHtml(t.name)} as a guided workout">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg><span>Guided</span>
+            </button>
+            <div class="pin-tile">
+              <div class="pin-tile-main">
+                <h4>${escapeHtml(t.name)}</h4>
+                <p class="muted">${escapeHtml(t.exerciseIds.slice(0, 3).map(exName).join(", "))}${t.exerciseIds.length > 3 ? ` +${t.exerciseIds.length - 3} more` : ""}</p>
+              </div>
+              <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
+            </div>
+          </div>`).join("")}
+        </div>
+        <p class="pin-hint">Swipe a template right to start it guided</p>
+      ` : "";
+
+      el.innerHTML = `
+        <div class="card start-card">
+          <h2>Ready to train?</h2>
+          <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
+          <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
+        </div>
+        <div class="section-label">Muscles hit</div>
+        ${muscleChartHtml({ history: state.history, exCat, fromKg, unit: state.unit, days: mvDays })}
+        ${pinnedHtml}
+        <div class="section-label">Jump to</div>
+        <div class="home-tiles">
+          <button class="home-tile" id="homeFriendsTile">
+            <span class="ht-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg></span>
+            <span class="ht-label">Friends</span>
+            <span class="ht-sub">See who's training</span>
+          </button>
+          <button class="home-tile" id="homeCalendarTile">
+            <span class="ht-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
+            <span class="ht-label">Calendar</span>
+            <span class="ht-sub">Plan a session</span>
+          </button>
+          <button class="home-tile" id="homeProfileTile">
+            <span class="ht-icon avatar-md">${avatarHtml()}</span>
+            <span class="ht-label">Profile</span>
+            <span class="ht-sub">Name, photo, settings</span>
+          </button>
+        </div>
+      `;
+      document.getElementById("startEmptyBtn").addEventListener("click", () => startWorkout(null));
+      document.getElementById("homeFriendsTile").addEventListener("click", () => setTab("friends"));
+      document.getElementById("homeCalendarTile").addEventListener("click", () => setTab("calendar"));
+      document.getElementById("homeProfileTile").addEventListener("click", () => openProfileSheet(ctx));
+      el.querySelectorAll("[data-mv-days]").forEach((b) => b.addEventListener("click", () => {
+        mvDays = parseInt(b.getAttribute("data-mv-days"), 10);
+        renderTrain();
+      }));
+      el.querySelectorAll(".pin-start").forEach((b) => b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"))));
+      el.querySelectorAll(".pin-guided").forEach((b) => {
+        b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"), true));
+        // Keyboard users can't swipe: tabbing onto the hidden action opens it.
+        b.addEventListener("focus", () => b.closest(".pin-swipe").classList.add("open"));
+        b.addEventListener("blur", () => b.closest(".pin-swipe").classList.remove("open"));
+      });
+      el.querySelectorAll(".pin-swipe").forEach(bindPinSwipe);
+      if (elapsedTimerHandle) { clearInterval(elapsedTimerHandle); elapsedTimerHandle = null; }
+      return;
+    }
+
+    const a = state.active;
+    const exCards = a.exercises.map((ex, exi) => {
+      const rows = ex.sets.map((s, si) => {
+        const wDisp = s.kg != null ? fmtNum(fromKg(s.kg, state.unit)) : "";
+        return `
+          <div class="set-row" data-exi="${exi}" data-si="${si}">
+            <div class="set-num">${si + 1}</div>
+            <input type="text" inputmode="decimal" autocomplete="off" class="set-weight" placeholder="${state.unit}" value="${wDisp}">
+            <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="set-reps" placeholder="reps" value="${s.reps != null ? s.reps : ""}">
+            <button class="set-done ${s.done ? "on" : ""}" title="Mark done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></button>
+            <button class="set-del" title="Delete set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>`;
+      }).join("");
+
+      return `
+        <div class="exercise-card" data-exi="${exi}">
+          <div class="exercise-card-head">
+            <div><h3>${escapeHtml(exName(ex.exerciseId))}</h3><span class="cat-tag">${escapeHtml(exCat(ex.exerciseId))}</span></div>
+            <button class="icon-btn remove-ex" title="Remove exercise" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+          <div class="sets-table">
+            <div class="sets-head"><span></span><span>Weight (${state.unit})</span><span>Reps</span><span></span><span></span></div>
+            ${rows}
+          </div>
+          <button class="btn btn-ghost add-set-btn">+ Add Set</button>
+        </div>`;
+    }).join("");
+
+    el.innerHTML = `
+      <div class="active-head">
+        <div><div class="elapsed-label">In progress</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
+        <div class="head-actions">
+          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
+          <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
+        </div>
+      </div>
+      <div id="discardConfirm"></div>
+      ${exCards}
+      <button class="btn btn-secondary btn-block" id="addExerciseBtn">+ Add Exercise</button>
+    `;
+
+    function tickElapsed() {
+      const sec = (Date.now() - a.startedAt) / 1000;
+      document.getElementById("activeElapsed").textContent = fmtElapsed(sec);
+    }
+    tickElapsed();
+    if (elapsedTimerHandle) clearInterval(elapsedTimerHandle);
+    elapsedTimerHandle = setInterval(tickElapsed, 1000);
+
+    document.getElementById("finishBtn").addEventListener("click", finishWorkout);
+    document.getElementById("discardBtn").addEventListener("click", () => {
+      document.getElementById("discardConfirm").innerHTML = `
+        <div class="confirm-row"><span>Discard this workout?</span><span class="spacer"></span>
+        <button class="btn btn-danger btn-sm" id="confirmDiscard">Discard</button>
+        <button class="btn btn-secondary btn-sm" id="cancelDiscard">Cancel</button></div>`;
+      document.getElementById("confirmDiscard").addEventListener("click", discardWorkout);
+      document.getElementById("cancelDiscard").addEventListener("click", () => { document.getElementById("discardConfirm").innerHTML = ""; });
+    });
+
+    el.querySelectorAll(".remove-ex").forEach((b) => b.addEventListener("click", () => {
+      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
+      a.exercises.splice(exi, 1);
+      saveActiveDraft(); renderTrain();
+    }));
+    el.querySelectorAll(".add-set-btn").forEach((b) => b.addEventListener("click", () => {
+      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
+      const sets = a.exercises[exi].sets;
+      const last = sets[sets.length - 1];
+      sets.push({ kg: last ? last.kg : null, reps: last ? last.reps : null, done: false });
+      saveActiveDraft(); renderTrain();
+    }));
+    el.querySelectorAll(".set-weight").forEach((inp) => inp.addEventListener("input", () => {
+      const row = inp.closest(".set-row");
+      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
+      const v = parseNum(inp.value);
+      a.exercises[exi].sets[si].kg = isNaN(v) ? null : toKg(v, state.unit);
+      saveActiveDraft();
+    }));
+    el.querySelectorAll(".set-reps").forEach((inp) => inp.addEventListener("input", () => {
+      const row = inp.closest(".set-row");
+      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
+      const v = parseInt(inp.value, 10);
+      a.exercises[exi].sets[si].reps = isNaN(v) ? null : v;
+      saveActiveDraft();
+    }));
+    el.querySelectorAll(".set-done").forEach((btn) => btn.addEventListener("click", () => {
+      const row = btn.closest(".set-row");
+      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
+      const s = a.exercises[exi].sets[si];
+      s.done = !s.done;
+      saveActiveDraft();
+      btn.classList.toggle("on", s.done);
+      if (s.done) startRestTimer(a.exercises[exi].restSec || state.restDuration);
+    }));
+    el.querySelectorAll(".set-del").forEach((btn) => btn.addEventListener("click", () => {
+      const row = btn.closest(".set-row");
+      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
+      a.exercises[exi].sets.splice(si, 1);
+      if (a.exercises[exi].sets.length === 0) a.exercises[exi].sets.push({ kg: null, reps: null, done: false });
+      saveActiveDraft(); renderTrain();
+    }));
+
+    document.getElementById("addExerciseBtn").addEventListener("click", openAddExerciseSheet);
+  }
+
+  function openAddExerciseSheet() {
+    renderPickerSheet("Add Exercise", (exId) => {
+      state.active.exercises.push({ exerciseId: exId, sets: [{ kg: null, reps: null, done: false }] });
+      saveActiveDraft();
+      closeSheet();
+      renderTrain();
+    });
+  }
+
+  function renderPickerSheet(title, onPick) {
+    let activeCat = null;
+    const MAX_RESULTS = 150;
+
+    function draw(filterRaw) {
+      const q = (filterRaw || "").trim().toLowerCase();
+      const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
+
+      if (!q && !activeCat) {
+        return `<div class="cat-chip-row">${chips}</div><p class="pick-note">Search by name, or pick a category to browse.</p>`;
+      }
+
+      const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
+      const matches = q ? pool.filter((e) => matchesSearch(e, q)) : pool;
+      const shown = matches.slice(0, MAX_RESULTS);
+      let rowsHtml = shown.map((e) => `<div class="pick-row" data-id="${e.id}"><span>${escapeHtml(e.name)}</span><span class="pick-eq">${escapeHtml(e.equipment || "")}</span></div>`).join("");
+      if (!shown.length) rowsHtml = `<p class="pick-note">No matches.</p>`;
+      const moreNote = matches.length > MAX_RESULTS
+        ? `<p class="pick-note">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
+        : "";
+      return `<div class="stack"><div class="cat-chip-row">${chips}</div><div class="pick-list">${rowsHtml}</div>${moreNote}</div>`;
+    }
+
+    openSheet(`
+      <div class="sheet-title"><h3>${title}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="field"><input type="search" id="pickerSearch" placeholder="Search exercises…" autocomplete="off" enterkeyhint="search"></div>
+      <div id="pickerBody">${draw("")}</div>
+    `);
+
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    function bindAll() {
+      document.querySelectorAll("#pickerBody .pick-row").forEach((r) => r.addEventListener("click", () => onPick(r.getAttribute("data-id"))));
+      document.querySelectorAll("#pickerBody .cat-chip").forEach((b) => b.addEventListener("click", () => {
+        activeCat = activeCat === b.getAttribute("data-cat") ? null : b.getAttribute("data-cat");
+        document.getElementById("pickerBody").innerHTML = draw(document.getElementById("pickerSearch").value);
+        bindAll();
+      }));
+    }
+    bindAll();
+    document.getElementById("pickerSearch").addEventListener("input", (e) => {
+      document.getElementById("pickerBody").innerHTML = draw(e.target.value);
+      bindAll();
+    });
+  }
+
+  /* ================= REST TIMER ================= */
+  let restTickHandle = null;
+  let audioCtx = null;
+  function beep() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const t0 = audioCtx.currentTime;
+      [0, 0.18, 0.36].forEach((off) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine"; osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.0001, t0 + off);
+        gain.gain.exponentialRampToValueAtTime(0.25, t0 + off + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.15);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(t0 + off); osc.stop(t0 + off + 0.16);
+      });
+    } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (e) {}
+  }
+
+  function startRestTimer(sec) {
+    state.timer = { endsAt: Date.now() + sec * 1000, duration: sec, done: false };
+    renderRestBanner();
+  }
+  function adjustRestTimer(delta) {
+    if (!state.timer) return;
+    state.timer.endsAt += delta * 1000;
+    state.timer.duration = Math.max(1, state.timer.duration + delta);
+    renderRestBanner();
+  }
+  function stopRestTimer() {
+    state.timer = null;
+    renderRestBanner();
+  }
+
+  // Built once per timer, then only the text and bar change each tick —
+  // re-creating the buttons 4× a second made taps get lost on phones.
+  function renderRestBanner() {
+    const el = document.getElementById("restBanner");
+    if (!el) return;
+    if (!state.timer) {
+      el.hidden = true;
+      el.innerHTML = "";
+      if (restTickHandle) { clearInterval(restTickHandle); restTickHandle = null; }
+      return;
+    }
+    if (!el.querySelector(".rest-time")) {
+      el.innerHTML = `
+        <div class="rest-top"><span class="rest-label">Resting</span><span class="rest-time num">0:00</span></div>
+        <div class="rest-bar"><div></div></div>
+        <div class="rest-actions">
+          <button type="button" data-a="-15">−15s</button>
+          <button type="button" data-a="+15">+15s</button>
+          <button type="button" class="skip" data-a="skip">Skip</button>
+        </div>`;
+      el.querySelector('[data-a="-15"]').addEventListener("click", () => adjustRestTimer(-15));
+      el.querySelector('[data-a="+15"]').addEventListener("click", () => adjustRestTimer(15));
+      el.querySelector('[data-a="skip"]').addEventListener("click", stopRestTimer);
+    }
+    el.hidden = false;
+    const labelEl = el.querySelector(".rest-label");
+    const timeEl = el.querySelector(".rest-time");
+    const barEl = el.querySelector(".rest-bar > div");
+    const skipEl = el.querySelector('[data-a="skip"]');
+    function tick() {
+      if (!state.timer) return;
+      const remain = (state.timer.endsAt - Date.now()) / 1000;
+      const over = remain <= 0;
+      if (over && !state.timer.done) { state.timer.done = true; beep(); }
+      el.classList.toggle("over", over);
+      const pct = over ? 1 : Math.max(0, Math.min(1, remain / state.timer.duration));
+      const label = over ? "Over rest — go again?" : "Resting";
+      const time = `${over ? "+" : ""}${fmtClock(over ? -remain : remain)}`;
+      if (labelEl.textContent !== label) labelEl.textContent = label;
+      if (timeEl.textContent !== time) timeEl.textContent = time;
+      barEl.style.transform = `scaleX(${pct})`;
+      const skip = over ? "Dismiss" : "Skip";
+      if (skipEl.textContent !== skip) skipEl.textContent = skip;
+    }
+    tick();
+    if (restTickHandle) clearInterval(restTickHandle);
+    restTickHandle = setInterval(tick, 250);
+  }
+
+  /* ================= HISTORY ================= */
+  let chartExId = null, chartMetric = "weight";
+
+  function computeStats() {
+    let totalVolKg = 0;
+    state.history.forEach((sess) => sess.exercises.forEach((ex) => ex.sets.forEach((s) => { totalVolKg += (s.kg || 0) * (s.reps || 0); })));
+    const avgDur = state.history.length ? state.history.reduce((a, s) => a + s.durationSec, 0) / state.history.length : 0;
+    return { count: state.history.length, totalVol: totalVolKg, avgDur };
+  }
+
+  function exercisesWithHistory() {
+    const seen = {}, list = [];
+    state.history.forEach((sess) => sess.exercises.forEach((ex) => { if (!seen[ex.exerciseId]) { seen[ex.exerciseId] = true; list.push(ex.exerciseId); } }));
+    list.sort((a, b) => exName(a).localeCompare(exName(b)));
+    return list;
+  }
+
+  function seriesFor(exId, metric) {
+    const pts = [];
+    const sorted = state.history.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+    sorted.forEach((sess) => sess.exercises.forEach((ex) => {
+      if (ex.exerciseId !== exId) return;
+      const val = metric === "weight"
+        ? ex.sets.reduce((m, s) => Math.max(m, s.kg || 0), 0)
+        : ex.sets.reduce((sum, s) => sum + (s.kg || 0) * (s.reps || 0), 0);
+      pts.push({ date: sess.date, value: val });
+    }));
+    return pts;
+  }
+
+  function renderHistory() {
+    const el = document.getElementById("tab-history");
+    const stats = computeStats();
+    const exWithHist = exercisesWithHistory();
+    if (!chartExId || exWithHist.indexOf(chartExId) === -1) chartExId = exWithHist[0] || null;
+
+    const statHtml = `
+      <div class="stat-row">
+        <div class="stat-tile"><span class="v">${stats.count}</span><span class="l">Workouts</span></div>
+        <div class="stat-tile"><span class="v">${Math.round(fromKg(stats.totalVol, state.unit)).toLocaleString()}</span><span class="l">Total ${state.unit} lifted</span></div>
+        <div class="stat-tile"><span class="v">${stats.count ? fmtDuration(stats.avgDur) : "—"}</span><span class="l">Avg length</span></div>
+      </div>`;
+
+    let chartHtml;
+    if (!exWithHist.length) {
+      chartHtml = '<div class="card empty-state"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><p>Log a few workouts to start seeing progress charts here.</p></div>';
+    } else {
+      const opts = exWithHist.map((id) => `<option value="${id}"${id === chartExId ? " selected" : ""}>${escapeHtml(exName(id))}</option>`).join("");
+      chartHtml = `
+        <div class="card chart-card">
+          <select id="chartExSelect">${opts}</select>
+          <div class="metric-toggle">
+            <button data-m="weight" class="${chartMetric === "weight" ? "active" : ""}">Best Set (${state.unit})</button>
+            <button data-m="volume" class="${chartMetric === "volume" ? "active" : ""}">Total Volume</button>
+          </div>
+          <div class="chart-wrap" id="chartWrap"></div>
+        </div>`;
+    }
+
+    let sessHtml;
+    if (!state.history.length) {
+      sessHtml = '<div class="card empty-state"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><p>No workouts yet — finish your first session and it will show up here.</p></div>';
+    } else {
+      sessHtml = state.history.map((sess) => {
+        const vol = sess.exercises.reduce((sum, ex) => sum + ex.sets.reduce((s2, s) => s2 + (s.kg || 0) * (s.reps || 0), 0), 0);
+        const exDetail = sess.exercises.map((ex) => {
+          const setsStr = ex.sets.map((s) => `${fmtNum(fromKg(s.kg, state.unit))}×${s.reps}`).join("  ");
+          return `<div class="session-ex"><div class="exn">${escapeHtml(ex.name)}</div><div class="exs">${setsStr} ${state.unit}</div></div>`;
+        }).join("");
+        return `
+          <div class="session-card" data-id="${sess.id}">
+            <div class="session-head">
+              <div><div class="sdate">${fmtDate(sess.date)}</div>
+              <div class="smeta">${sess.exercises.length} exercises · ${fmtDuration(sess.durationSec)} · ${Math.round(fromKg(vol, state.unit)).toLocaleString()} ${state.unit}</div></div>
+              <svg class="schev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+            <div class="session-body">${exDetail}</div>
+          </div>`;
+      }).join("");
+    }
+
+    el.innerHTML = statHtml + chartHtml + '<div class="section-label">History</div>' + (state.history.length ? `<div class="session-list">${sessHtml}</div>` : sessHtml);
+
+    if (exWithHist.length) {
+      document.getElementById("chartExSelect").addEventListener("change", (e) => { chartExId = e.target.value; renderHistory(); });
+      el.querySelectorAll(".metric-toggle button").forEach((b) => b.addEventListener("click", () => { chartMetric = b.getAttribute("data-m"); renderHistory(); }));
+      drawChart(document.getElementById("chartWrap"), seriesFor(chartExId, chartMetric), chartMetric, state.unit);
+    }
+
+    el.querySelectorAll(".session-card").forEach((card) => card.querySelector(".session-head").addEventListener("click", () => card.classList.toggle("open")));
+  }
+
+  /* ================= EXERCISES ================= */
+  let exSearch = "";
+  let exEquipment = null;
+
+  const EQUIPMENT_GROUPS = [
+    { key: "body only", label: "Bodyweight" },
+    { key: "barbell", label: "Barbell" },
+    { key: "dumbbell", label: "Dumbbell" },
+    { key: "cable", label: "Cable" },
+    { key: "machine", label: "Machine" },
+    { key: "kettlebells", label: "Kettlebell" },
+    { key: "bands", label: "Bands" }
+  ];
+
+  function bestPr(exId) {
+    let best = 0;
+    state.history.forEach((sess) => sess.exercises.forEach((ex) => { if (ex.exerciseId === exId) ex.sets.forEach((s) => { if ((s.kg || 0) > best) best = s.kg; }); }));
+    return best;
+  }
+
+  const ICON = {
+    star: (on) => `<svg viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M12 2l2.9 6.5L22 9.3l-5 4.9 1.2 7.1L12 17.8l-6.2 3.5L7 14.2 2 9.3l7.1-.8L12 2z"/></svg>`,
+    play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>',
+    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-10-8-10-8a18.5 18.5 0 015.06-5.94M9.9 4.24A10.4 10.4 0 0112 4c7 0 10 8 10 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><path d="M1 1l22 22"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>',
+    chev: '<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>'
+  };
+
+  function templateCardHtml(t) {
+    const pinned = isPinnedTemplate(t.id);
+    return `
+      <div class="tpl-list-card tpl" data-id="${t.id}">
+        <div class="tpl-top">
+          <div class="info">
+            <h4>${escapeHtml(t.name)}</h4>
+            <p>${escapeHtml(t.exerciseIds.map(exName).join(", ") || "No exercises yet")}</p>
+          </div>
+          <button class="icon-btn sm pin-tpl ${pinned ? "pinned" : ""}" data-id="${t.id}" title="${pinned ? "Unpin" : "Pin to home screen"}" aria-label="${pinned ? "Unpin template" : "Pin template to home screen"}">${ICON.star(pinned)}</button>
+          <button class="icon-btn sm share-tpl" data-id="${t.id}" title="Share with friends" aria-label="Share template with friends">${ICON.share}</button>
+        </div>
+        <div class="tpl-actions">
+          <button class="btn btn-primary btn-sm start-tpl2" data-id="${t.id}">Start</button>
+          <button class="btn btn-secondary btn-sm run-tpl" data-id="${t.id}">${ICON.play}Guided</button>
+          <button class="icon-btn sm edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template">${ICON.edit}</button>
+          ${t.isCustom
+            ? `<button class="icon-btn sm del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template">${ICON.x}</button>`
+            : `<button class="icon-btn sm hide-tpl" data-id="${t.id}" title="Hide this default template" aria-label="Hide this default template">${ICON.eyeOff}</button>`}
+        </div>
+      </div>`;
+  }
+
+  function shareCardHtml(sh) {
+    const n = (sh.exerciseIds || []).length;
+    return `
+      <div class="share-card" data-id="${sh.id}">
+        <div class="info">
+          <span class="tpl-badge">${ICON.share.replace("<svg", '<svg width="12" height="12"')}From ${escapeHtml(sh.senderName)}</span>
+          <h4>${escapeHtml(sh.name)}</h4>
+          <p>${n} exercise${n === 1 ? "" : "s"} · ${escapeHtml(sh.exerciseIds.slice(0, 3).map((id) => (sh.exerciseMeta[id] && sh.exerciseMeta[id].name) || exName(id)).join(", "))}${n > 3 ? ` +${n - 3} more` : ""}</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary btn-sm accept-share" data-id="${sh.id}">Add &amp; customise</button>
+          <button class="btn btn-secondary btn-sm decline-share" data-id="${sh.id}">Decline</button>
+        </div>
+      </div>`;
+  }
+
+  // Library groups render their rows only when opened (or while searching):
+  // 875+ rows rebuilt on every keystroke was what made typing lag on phones.
+  const LIB_SEARCH_LIMIT = 60;
+  function libraryRowsHtml(items) {
+    return items.map((e) => {
+      const pr = bestPr(e.id);
+      return `
+        <div class="ex-row" data-id="${e.id}">
+          <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
+          <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
+          ${e.isCustom
+            ? `<button class="icon-btn sm del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise">${ICON.x}</button>`
+            : ICON.chev}
+        </div>`;
+    }).join("");
+  }
+
+  function libraryItemsFor(cat) {
+    const q = exSearch.trim().toLowerCase();
+    let items = state.exercises.filter((e) => e.cat === cat);
+    if (exEquipment) items = items.filter((e) => (e.equipment || "other") === exEquipment);
+    if (q) items = items.filter((e) => matchesSearch(e, q));
+    return items;
+  }
+
+  function renderLibrary() {
+    const box = document.getElementById("exLibrary");
+    if (!box) return;
+    const searching = exSearch.trim().length > 0 || !!exEquipment;
+    const groups = CAT_ORDER.map((cat) => {
+      const items = libraryItemsFor(cat);
+      if (!items.length) return "";
+      const shown = searching ? items.slice(0, LIB_SEARCH_LIMIT) : [];
+      const more = searching && items.length > shown.length ? `<div class="lib-more">Showing ${shown.length} of ${items.length} — keep typing to narrow it down.</div>` : "";
+      return `<details class="cat-group" data-cat="${escapeHtml(cat)}" ${searching ? "open" : ""}><summary>${escapeHtml(cat)} <span class="count">${items.length}</span></summary>${searching ? libraryRowsHtml(shown) + more : ""}</details>`;
+    }).join("");
+    box.innerHTML = groups || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`;
+    box.querySelectorAll("details.cat-group").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open && !d.querySelector(".ex-row")) {
+        d.insertAdjacentHTML("beforeend", libraryRowsHtml(libraryItemsFor(d.getAttribute("data-cat"))));
+      }
+    }));
+  }
+
+  function renderExercises() {
+    const el = document.getElementById("tab-exercises");
+    const visibleTpl = visibleTemplates();
+    const tplHtml = visibleTpl.length
+      ? `<div class="tpl-list">${visibleTpl.map(templateCardHtml).join("")}</div>`
+      : '<div class="card"><p class="muted">No templates yet — tap New to build one.</p></div>';
+    const sharesHtml = state.shares.length ? `
+      <div class="section-label">Shared with you <span class="count">${state.shares.length}</span></div>
+      <div class="stack-sm">${state.shares.map(shareCardHtml).join("")}</div>` : "";
+    const eqChipsHtml = EQUIPMENT_GROUPS.map((g) => `<button class="cat-chip ${exEquipment === g.key ? "active" : ""}" data-eq="${g.key}">${escapeHtml(g.label)}</button>`).join("");
+
+    el.innerHTML = `
+      ${sharesHtml}
+      <div class="page-head"><h2>Templates</h2><button class="btn btn-secondary btn-sm" id="newTplBtn">+ New</button></div>
+      ${tplHtml}
+      <div class="page-head"><h2>Library</h2><button class="btn btn-secondary btn-sm" id="newExBtn">+ Add custom</button></div>
+      <input type="search" class="search-input" id="exSearchInput" placeholder="Search 875+ exercises…" value="${escapeHtml(exSearch)}" autocomplete="off" enterkeyhint="search">
+      <div class="cat-chip-row" id="eqChips">${eqChipsHtml}</div>
+      <div class="lib-groups" id="exLibrary"></div>
+    `;
+    renderLibrary();
+
+    document.getElementById("newTplBtn").addEventListener("click", () => openTemplateEditor(ctx, null));
+    document.getElementById("newExBtn").addEventListener("click", openCustomExerciseForm);
+    let searchT = null;
+    document.getElementById("exSearchInput").addEventListener("input", (e) => {
+      exSearch = e.target.value;
+      clearTimeout(searchT);
+      searchT = setTimeout(renderLibrary, 120);
+    });
+    el.querySelectorAll(".cat-chip[data-eq]").forEach((b) => b.addEventListener("click", () => {
+      exEquipment = exEquipment === b.getAttribute("data-eq") ? null : b.getAttribute("data-eq");
+      el.querySelectorAll(".cat-chip[data-eq]").forEach((c) => c.classList.toggle("active", c.getAttribute("data-eq") === exEquipment));
+      renderLibrary();
+    }));
+
+    el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
+    el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id"), true); setTab("train"); }));
+    el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
+    el.querySelectorAll(".share-tpl").forEach((b) => b.addEventListener("click", () => openShareSheet(byId(state.templates, b.getAttribute("data-id")))));
+    el.querySelectorAll(".pin-tpl").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePinTemplate(b.getAttribute("data-id"));
+    }));
+    el.querySelectorAll(".hide-tpl").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideBuiltinTemplate(b.getAttribute("data-id"));
+    }));
+    el.querySelectorAll(".del-tpl").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = b.getAttribute("data-id");
+      try {
+        await db.deleteTemplate(id);
+        state.templates = state.templates.filter((t) => t.id !== id);
+        renderExercises(); toast("Template deleted");
+      } catch (err) { toast("Couldn't delete template"); }
+    }));
+    el.querySelectorAll(".accept-share").forEach((b) => b.addEventListener("click", () => acceptShare(b.getAttribute("data-id"), b)));
+    el.querySelectorAll(".decline-share").forEach((b) => b.addEventListener("click", () => declineShare(b.getAttribute("data-id"))));
+
+    // library rows are added lazily, so listen once on the container
+    const lib = document.getElementById("exLibrary");
+    lib.addEventListener("click", async (e) => {
+      const del = e.target.closest(".del-ex");
+      if (del) {
+        e.stopPropagation();
+        const id = del.getAttribute("data-id");
+        try {
+          await db.deleteCustomExercise(id);
+          state.exercises = state.exercises.filter((e2) => e2.id !== id);
+          renderLibrary(); toast("Exercise removed");
+        } catch (err) { toast("Couldn't delete exercise"); }
+        return;
+      }
+      const row = e.target.closest(".ex-row");
+      if (row) openExerciseDetail(byId(state.exercises, row.getAttribute("data-id")));
+    });
+  }
+
+  /* ---------- template sharing ---------- */
+  async function loadFriendsList() {
+    if (!state.friends) {
+      try { state.friends = await db.listFriendships(user.id); }
+      catch (e) { state.friends = { accepted: [], incoming: [], outgoing: [] }; }
+    }
+    return state.friends.accepted;
+  }
+
+  async function openShareSheet(t) {
+    if (!t) return;
+    openSheet(`
+      <div class="sheet-title"><h3>Share template</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close">${ICON.x}</button></div>
+      <p class="muted">Loading your friends…</p>`);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    const friends = await loadFriendsList();
+    const picked = new Set();
+    function draw() {
+      const listHtml = friends.length
+        ? `<div class="pick-list">${friends.map((r) => {
+            const nm = (r.otherProfile && r.otherProfile.display_name) || "Friend";
+            const on = picked.has(r.otherId);
+            return `<button type="button" class="friend-pick${on ? " on" : ""}" data-id="${r.otherId}" aria-pressed="${on}">
+              <span class="avatar-sm">${r.otherProfile && r.otherProfile.avatar_url ? `<img src="${r.otherProfile.avatar_url}" alt="">` : escapeHtml(nm.charAt(0).toUpperCase())}</span>
+              <span class="nm">${escapeHtml(nm)}</span>
+              <span class="chk">${ICON.check}</span>
+            </button>`;
+          }).join("")}</div>`
+        : `<div class="card"><p class="muted">You haven't added any friends yet. Add someone in the Friends tab, then share from here.</p><button class="btn btn-secondary btn-block" id="goFriendsBtn">Go to Friends</button></div>`;
+      openSheet(`
+        <div class="sheet-title"><h3>Share “${escapeHtml(t.name)}”</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close">${ICON.x}</button></div>
+        <p class="muted">Friends get their own copy with your sets, reps and weights as a starting point — they can change anything without touching yours.</p>
+        ${listHtml}
+        ${friends.length ? `<button class="btn btn-primary btn-block" id="sendShareBtn"${picked.size ? "" : " disabled"}>${picked.size ? `Send to ${picked.size} friend${picked.size === 1 ? "" : "s"}` : "Pick at least one friend"}</button>` : ""}
+      `);
+      document.getElementById("sheetClose").addEventListener("click", closeSheet);
+      const go = document.getElementById("goFriendsBtn");
+      if (go) go.addEventListener("click", () => { closeSheet(); setTab("friends"); });
+      document.querySelectorAll(".friend-pick").forEach((b) => b.addEventListener("click", () => {
+        const id = b.getAttribute("data-id");
+        if (picked.has(id)) picked.delete(id); else picked.add(id);
+        draw();
+      }));
+      const send = document.getElementById("sendShareBtn");
+      if (send) send.addEventListener("click", async () => {
+        send.disabled = true; send.textContent = "Sending…";
+        const meta = {};
+        t.exerciseIds.forEach((id) => { const e = byId(state.exercises, id); if (e) meta[id] = { name: e.name, cat: e.cat, custom: !!e.isCustom }; });
+        try {
+          await db.shareTemplate(user.id, [...picked], { name: t.name, exerciseIds: t.exerciseIds, targets: t.targets || {}, exerciseMeta: meta, unit: state.unit });
+          closeSheet();
+          toast(picked.size === 1 ? "Template shared" : `Shared with ${picked.size} friends`);
+        } catch (err) {
+          toast(/template_shares/.test(err.message || "") ? "Sharing isn't set up yet — run migration_5 in Supabase" : "Couldn't share: " + (err.message || String(err)));
+          send.disabled = false; send.textContent = `Send to ${picked.size} friend${picked.size === 1 ? "" : "s"}`;
+        }
+      });
+    }
+    draw();
+  }
+
+  async function refreshShares(rerender) {
+    try {
+      const shares = await db.listIncomingShares(user.id);
+      const changed = shares.length !== state.shares.length || shares.some((x, i) => !state.shares[i] || state.shares[i].id !== x.id);
+      state.shares = shares;
+      updateShareBadge();
+      if (changed && rerender && currentTab === "exercises") renderExercises();
+      return changed;
+    } catch (e) { return false; } // table not created yet → sharing just stays hidden
+  }
+
+  function updateShareBadge() {
+    const btn = document.querySelector('.tabbar button[data-tab="exercises"]');
+    if (!btn) return;
+    let dot = btn.querySelector(".tab-badge");
+    if (state.shares.length && !dot) { dot = document.createElement("i"); dot.className = "tab-badge"; btn.appendChild(dot); }
+    if (!state.shares.length && dot) dot.remove();
+  }
+
+  async function acceptShare(id, btn) {
+    const sh = state.shares.find((x) => x.id === id);
+    if (!sh) return;
+    if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+    try {
+      // The sender's own custom exercises don't exist for you yet, so make
+      // matching ones in your library and point the template at those.
+      const idMap = {};
+      for (const exId of sh.exerciseIds) {
+        if (byId(state.exercises, exId)) continue;
+        const m = sh.exerciseMeta[exId] || {};
+        const existing = state.exercises.find((e) => e.isCustom && e.name === (m.name || "Exercise"));
+        if (existing) { idMap[exId] = existing.id; continue; }
+        const created = await db.addCustomExercise(user.id, m.name || "Exercise", m.cat || CAT_ORDER[0]);
+        state.exercises.push(created);
+        idMap[exId] = created.id;
+      }
+      // Weights are stored in whatever unit the sender uses; convert to yours.
+      const conv = (w) => (w == null || w === "" || sh.unit === state.unit) ? w : roundDisp(fromKg(toKg(w, sh.unit), state.unit));
+      const ids = sh.exerciseIds.map((x) => idMap[x] || x);
+      const targets = {};
+      sh.exerciseIds.forEach((x) => {
+        const tg = (sh.targets || {})[x];
+        if (tg) targets[idMap[x] || x] = { ...tg, weight: conv(tg.weight) };
+      });
+      const taken = new Set(state.templates.map((t) => t.name));
+      let name = sh.name;
+      if (taken.has(name)) name = `${sh.name} (${sh.senderName})`;
+      const created = await db.addTemplate(user.id, name, ids, targets);
+      state.templates.push(created);
+      await db.respondToShare(id, "accepted");
+      state.shares = state.shares.filter((x) => x.id !== id);
+      updateShareBadge();
+      renderExercises();
+      toast("Added — set the reps and weights that suit you");
+      openTemplateEditor(ctx, created);
+    } catch (err) {
+      toast("Couldn't add that template: " + (err.message || String(err)));
+      if (btn) { btn.disabled = false; btn.textContent = "Add & customise"; }
+    }
+  }
+
+  async function declineShare(id) {
+    try {
+      await db.respondToShare(id, "declined");
+      state.shares = state.shares.filter((x) => x.id !== id);
+      updateShareBadge();
+      renderExercises();
+    } catch (err) { toast("Couldn't update that"); }
+  }
+
+  function openExerciseDetail(ex) {
+    if (!ex) return;
+    const hasImgs = Array.isArray(ex.images) && ex.images.length >= 2;
+    const instrHtml = (ex.instructions || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+    openSheet(`
+      <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="ex-tags">
+        <span class="ex-tag">${escapeHtml(ex.cat)}</span>
+        ${ex.equipment ? `<span class="ex-tag">${escapeHtml(ex.equipment)}</span>` : ""}
+        ${ex.level ? `<span class="ex-tag">${escapeHtml(ex.level)}</span>` : ""}
+      </div>
+      ${hasImgs ? `
+        <div class="ex-demo">
+          <img class="ex-demo-img on" id="exDemoA" src="${ex.images[0]}" alt="${escapeHtml(ex.name)}, position 1" loading="lazy">
+          <img class="ex-demo-img" id="exDemoB" src="${ex.images[1]}" alt="${escapeHtml(ex.name)}, position 2" loading="lazy">
+        </div>` : ""}
+      ${instrHtml ? `<ol class="ex-instructions">${instrHtml}</ol>` : '<p class="muted">No step-by-step instructions for this one yet.</p>'}
+    `);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    if (hasImgs) {
+      const a = document.getElementById("exDemoA");
+      const b = document.getElementById("exDemoB");
+      a.addEventListener("error", () => { a.style.display = "none"; });
+      b.addEventListener("error", () => { b.style.display = "none"; });
+      let showingA = true;
+      activeDetailInterval = setInterval(() => {
+        showingA = !showingA;
+        a.classList.toggle("on", showingA);
+        b.classList.toggle("on", !showingA);
+      }, 1100);
+    }
+  }
+
+  function openCustomExerciseForm() {
+    const catOpts = CAT_ORDER.map((c) => `<option value="${c}">${c}</option>`).join("");
+    openSheet(`
+      <div class="sheet-title"><h3>New Exercise</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="field"><label>Name</label><input type="text" id="newExName" placeholder="e.g. Cable Crossover"></div>
+      <div class="field"><label>Category</label><select id="newExCat">${catOpts}</select></div>
+      <button class="btn btn-primary btn-block" id="saveExBtn">Save Exercise</button>
+    `);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    document.getElementById("saveExBtn").addEventListener("click", async () => {
+      const name = document.getElementById("newExName").value.trim();
+      const cat = document.getElementById("newExCat").value;
+      if (!name) { toast("Enter a name"); return; }
+      const saveBtn = document.getElementById("saveExBtn");
+      saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+      try {
+        const created = await db.addCustomExercise(user.id, name, cat);
+        state.exercises.push(created);
+        closeSheet(); renderExercises(); toast("Exercise added");
+      } catch (err) {
+        toast("Couldn't save exercise");
+        saveBtn.disabled = false; saveBtn.textContent = "Save Exercise";
+      }
+    });
+  }
+
+  /* ---------- shared ctx for friends/calendar/profile/player modules ---------- */
+  ctx = {
+    user, supabase, db, state,
+    toast, openSheet, closeSheet, escapeHtml, uid, byId,
+    fmtDate, fmtShort, fmtDuration, roundDisp, fromKg, toKg, parseNum, fmtNum,
+    exName, exCat,
+    setTab, renderCurrentTab,
+    openExercisePicker: renderPickerSheet,
+    refreshTopbar,
+    setUnit, saveRestDuration,
+    isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates,
+    openPrivacy: () => openPrivacySheet({ openSheet, closeSheet })
+  };
+
+  /* ---------- init ---------- */
+  const d = new Date();
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  document.getElementById("dateTag").textContent = `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
+  setTab("train");
+  renderRestBanner();
+  // Check for templates friends have shared; nudge once if there are any.
+  refreshShares(false).then(() => {
+    if (state.shares.length) {
+      const n = state.shares.length;
+      toast(n === 1 ? `${state.shares[0].senderName} shared a template with you` : `${n} templates shared with you`);
+    }
+  });
+}
