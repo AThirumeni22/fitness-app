@@ -483,3 +483,250 @@ input[type="range"].time-slider::-moz-range-track{height:6px; border-radius:99px
 .pin-guided svg{width:18px; height:18px;}
 .pin-guided:focus-visible{outline:2px solid #fff; outline-offset:-4px;}
 .pin-hint{margin:-2px 0 0; font-size:11.5px; color:var(--ink-faint); text-align:center;}
+
+/* =====================================================================
+   ROUND 6 — bolder restyle + motion layer
+   Richer surfaces (layered glass with a cursor spotlight), a living
+   aurora backdrop, gradient accents on the things you act on, and
+   micro-interactions wired up by fx.js. Everything respects
+   prefers-reduced-motion (the global rule above zeroes it all out).
+   ===================================================================== */
+:root{
+  --r-s:8px; --r-m:14px; --r-l:20px;
+  --surface:rgba(20,22,30,.84); --surface-2:rgba(30,33,44,.82); --surface-hi:#252936;
+  --grad:linear-gradient(135deg, #6366F1 0%, #8B5CF6 55%, #A855F7 100%);
+  --grad-cool:linear-gradient(135deg, #6366F1 0%, #22D3EE 100%);
+  --hairline:inset 0 1px 0 rgba(255,255,255,.06);
+  --glow:0 10px 30px -6px rgba(124,92,246,.55), 0 0 0 1px rgba(255,255,255,.06) inset;
+}
+
+/* ---------- living backdrop ---------- */
+@keyframes auroraA{ 0%{transform:translate(0,0) scale(1);} 50%{transform:translate(8vw,6vh) scale(1.15);} 100%{transform:translate(0,0) scale(1);} }
+@keyframes auroraB{ 0%{transform:translate(0,0) scale(1.1);} 50%{transform:translate(-10vw,-4vh) scale(.95);} 100%{transform:translate(0,0) scale(1.1);} }
+body{background:#07080B;}
+body::before, body::after{content:""; position:fixed; z-index:-1; pointer-events:none; border-radius:50%; filter:blur(70px); opacity:.55;}
+body::before{width:70vmax; height:70vmax; left:-25vmax; top:-30vmax; background:radial-gradient(circle, rgba(99,102,241,.38), rgba(99,102,241,0) 65%); animation:auroraA 26s ease-in-out infinite;}
+body::after{width:60vmax; height:60vmax; right:-25vmax; top:10vh; background:radial-gradient(circle, rgba(34,211,238,.20), rgba(168,85,247,.12) 40%, rgba(0,0,0,0) 68%); animation:auroraB 32s ease-in-out infinite;}
+#app{position:relative; isolation:isolate;}
+#app::before{content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.06; mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+/* ---------- surfaces: layered glass + cursor spotlight ---------- */
+.card, .exercise-card, .session-card, .tpl-list-card, .pin-tile, .feed-card, .plan-card, .dw-card,
+.home-tile, .stat-tile, .active-head, details.cat-group, .tpl-edit-row, .auth-card{
+  background:
+    radial-gradient(260px circle at var(--mx,-400px) var(--my,-400px), rgba(129,140,248,.13), rgba(129,140,248,0) 70%),
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0) 40%),
+    var(--surface);
+  border:1px solid var(--border);
+  box-shadow:var(--hairline), 0 1px 2px rgba(0,0,0,.3);
+}
+.home-tile:hover{background:
+    radial-gradient(260px circle at var(--mx,-400px) var(--my,-400px), rgba(129,140,248,.16), rgba(129,140,248,0) 70%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0) 40%), var(--surface-hi);}
+/* the swipe tile sits on the gradient 'Guided' action, so it must be opaque */
+.pin-swipe .pin-tile{background:
+    radial-gradient(260px circle at var(--mx,-400px) var(--my,-400px), rgba(129,140,248,.13), rgba(129,140,248,0) 70%),
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,0) 40%), #15171F;}
+.auth-card, .active-head{backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);}
+.card:hover, .exercise-card:hover, .session-card:hover, .tpl-list-card:hover, .feed-card:hover, .plan-card:hover, .dw-card:hover, .stat-tile:hover{
+  border-color:var(--border-strong);
+}
+.card, .exercise-card, .session-card, .tpl-list-card, .feed-card, .plan-card, .dw-card, .stat-tile{transition:border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);}
+.tpl-list-card:hover, .feed-card:hover, .plan-card:hover, .session-card:hover{transform:translateY(-1px); box-shadow:var(--hairline), 0 12px 28px -12px rgba(0,0,0,.6);}
+
+/* staggered entrances for lists */
+/* uses the individual translate/scale properties so the filled end state
+   never pins `transform` (hover lifts and tile tilt keep working) */
+@keyframes fadeRise{ from{opacity:0; translate:0 14px; scale:.985;} to{opacity:1; translate:none; scale:none;} }
+.session-card, .feed-card, .tpl-list-card, .pin-swipe, .plan-card, .dw-card, .exercise-card{animation:fadeRise .5s var(--ease) both;}
+.session-card:nth-child(2), .feed-card:nth-child(2), .tpl-list-card:nth-child(2), .pin-swipe:nth-child(2), .exercise-card:nth-child(3){animation-delay:40ms;}
+.session-card:nth-child(3), .feed-card:nth-child(3), .tpl-list-card:nth-child(3), .pin-swipe:nth-child(3), .exercise-card:nth-child(4){animation-delay:80ms;}
+.session-card:nth-child(4), .feed-card:nth-child(4), .tpl-list-card:nth-child(4), .pin-swipe:nth-child(4), .exercise-card:nth-child(5){animation-delay:120ms;}
+.session-card:nth-child(n+5), .feed-card:nth-child(n+5), .tpl-list-card:nth-child(n+5), .pin-swipe:nth-child(n+5), .exercise-card:nth-child(n+6){animation-delay:160ms;}
+.cal-grid .cal-cell{animation:fadeRise .45s var(--ease) both;}
+.cal-grid .cal-cell:nth-child(n+8){animation-delay:30ms;}
+.cal-grid .cal-cell:nth-child(n+15){animation-delay:60ms;}
+.cal-grid .cal-cell:nth-child(n+22){animation-delay:90ms;}
+.cal-grid .cal-cell:nth-child(n+29){animation-delay:120ms;}
+/* once you're interacting inside a tab, re-renders stop replaying entrances */
+.tab[data-settled], .tab[data-settled] :where(*:not(.fx-ripple)){animation:none !important;}
+
+/* ---------- topbar ---------- */
+.topbar{background:rgba(7,8,11,.55); border-bottom-color:transparent; transition:background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);}
+.topbar.scrolled{background:rgba(9,10,14,.82); border-bottom-color:var(--border); box-shadow:0 10px 30px -18px rgba(0,0,0,.9);}
+@keyframes shimmer{ 0%{background-position:0% 50%;} 100%{background-position:200% 50%;} }
+.topbar .brand .mark, .auth-brand .mark{
+  background:linear-gradient(90deg, #F3F4F7 0%, #A5B4FC 25%, #67E8F9 45%, #F3F4F7 60%, #F3F4F7 100%);
+  background-size:200% 100%; -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  animation:shimmer 7s linear infinite; font-weight:700;
+}
+.chip-btn{border-radius:999px; background:rgba(255,255,255,.04);}
+.chip-btn:hover{background:rgba(255,255,255,.08);}
+.avatar-sm{box-shadow:0 0 0 2px rgba(129,140,248,.35);}
+
+/* ---------- buttons ---------- */
+.btn, .chip-btn, .icon-btn, .home-tile, .tabbar button, .cat-chip, .seg-toggle button, .metric-toggle button, .preset-row button, .auth-tabs button, .rest-actions button{position:relative; overflow:hidden;}
+.btn-primary{background:var(--grad); background-size:140% 140%; background-position:0% 50%; box-shadow:var(--glow); border:none;}
+.btn-primary::after{content:""; position:absolute; inset:0; background:linear-gradient(105deg, transparent 30%, rgba(255,255,255,.28) 48%, transparent 66%); transform:translateX(-120%); transition:transform .7s var(--ease); pointer-events:none;}
+.btn-primary:hover{background:var(--grad); background-position:100% 50%; box-shadow:0 14px 36px -8px rgba(124,92,246,.7), 0 0 0 1px rgba(255,255,255,.1) inset; transform:translateY(-1px);}
+.btn-primary:hover::after{transform:translateX(120%);}
+.btn-primary:active{transform:translateY(0) scale(.97);}
+.btn-secondary{background:rgba(255,255,255,.05); box-shadow:var(--hairline);}
+.btn-ghost{border-style:dashed; border-radius:var(--r-m);}
+.btn-ghost:hover{border-style:solid;}
+.icon-btn{border-radius:12px; background:rgba(255,255,255,.04);}
+.icon-btn:hover{transform:translateY(-1px);}
+.icon-btn:hover svg{transform:scale(1.1);}
+.icon-btn svg{transition:transform var(--dur) var(--ease-spring);}
+
+/* selected states use the gradient */
+.cat-chip{border-radius:999px;}
+.cat-chip.active, .seg-toggle button.active, .metric-toggle button.active, .preset-row button.active{background:var(--grad); color:#fff; box-shadow:0 6px 18px -6px rgba(124,92,246,.7);}
+.cat-chip:hover:not(.active){color:var(--ink); border-color:var(--border-strong);}
+
+/* ripple (fx.js) */
+@keyframes ripple{ from{transform:scale(0); opacity:.38;} to{transform:scale(1); opacity:0;} }
+.fx-ripple{position:absolute; border-radius:50%; background:currentColor; pointer-events:none; animation:ripple .6s var(--ease) forwards; mix-blend-mode:screen;}
+.btn-primary .fx-ripple, .cat-chip.active .fx-ripple{background:#fff;}
+
+/* ---------- start card: rotating gradient rim ---------- */
+@property --spin{ syntax:"<angle>"; inherits:false; initial-value:0deg; }
+@keyframes spin{ to{--spin:360deg;} }
+.start-card{border:1px solid transparent; padding:22px;
+  background:
+    radial-gradient(260px circle at var(--mx,-400px) var(--my,-400px), rgba(129,140,248,.16), rgba(129,140,248,0) 70%) padding-box,
+    linear-gradient(160deg, rgba(99,102,241,.22), rgba(17,19,24,.9) 55%) padding-box,
+    conic-gradient(from var(--spin), rgba(99,102,241,.0), #818CF8, #22D3EE, #A855F7, rgba(99,102,241,0) 40%, rgba(99,102,241,0)) border-box;
+  animation:fadeRise var(--dur-slow) var(--ease) both, spin 6s linear infinite;
+}
+.tab[data-settled] .start-card{animation:spin 6s linear infinite !important;}
+.start-card::after{display:none;}
+.start-card h2{font-size:26px; letter-spacing:.005em;}
+.start-card .btn{min-height:52px; font-size:15.5px;}
+
+/* ---------- home tiles: 3D tilt (fx.js sets --rx/--ry) ---------- */
+.home-tile{border-top-width:1px; transform:perspective(700px) rotateX(var(--ry,0deg)) rotateY(var(--rx,0deg)); transition:transform .25s var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease); position:relative;}
+.home-tile::before{content:""; position:absolute; left:18%; right:18%; top:-1px; height:2px; border-radius:2px; background:var(--accent); box-shadow:0 0 12px var(--accent);}
+.home-tile:nth-child(2)::before{background:var(--steel); box-shadow:0 0 12px var(--steel);}
+.home-tile:nth-child(3)::before{background:var(--violet); box-shadow:0 0 12px var(--violet);}
+.home-tile:active{transform:perspective(700px) rotateX(var(--ry,0deg)) rotateY(var(--rx,0deg)) scale(.96);}
+.home-tile:hover .ht-icon{transform:translateY(-2px) scale(1.06);}
+.ht-icon{transition:transform var(--dur) var(--ease-spring); box-shadow:0 0 0 1px rgba(129,140,248,.25) inset;}
+
+/* ---------- section labels ---------- */
+.section-label::before{background:var(--grad-cool); box-shadow:0 0 10px rgba(99,102,241,.6);}
+
+/* ---------- stats: gradient numerals ---------- */
+.stat-tile .v, .active-head .elapsed{background:linear-gradient(180deg, #E0E7FF, #818CF8); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;}
+.stat-tile:nth-of-type(3n+2) .v{background-image:linear-gradient(180deg, #CFFAFE, #22D3EE);}
+.stat-tile:nth-of-type(3n+3) .v{background-image:linear-gradient(180deg, #EDE9FE, #A78BFA);}
+.stat-tile .v{font-size:22px; font-weight:600;}
+
+/* ---------- active workout ---------- */
+@keyframes livePulse{ 0%{box-shadow:0 0 0 0 rgba(52,211,153,.55);} 70%{box-shadow:0 0 0 8px rgba(52,211,153,0);} 100%{box-shadow:0 0 0 0 rgba(52,211,153,0);} }
+.active-head .elapsed-label{display:flex; align-items:center; gap:7px;}
+.active-head .elapsed-label::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--good); animation:livePulse 1.8s ease-out infinite;}
+.active-head .elapsed{font-size:30px;}
+.set-row{border-radius:10px; padding:2px; margin:0 -2px; transition:background-color .4s var(--ease);}
+.set-row:has(.set-done.on){background:rgba(52,211,153,.07);}
+.set-row:has(.set-done.on) input{border-color:rgba(52,211,153,.28);}
+@keyframes rowFlash{ 0%{background:rgba(52,211,153,.28);} 100%{background:rgba(52,211,153,.07);} }
+.set-row.fx-done{animation:rowFlash .7s var(--ease) both !important;}
+@keyframes donePop{ 0%{transform:scale(.7);} 55%{transform:scale(1.25);} 100%{transform:scale(1.08);} }
+.set-done.on{box-shadow:0 0 0 4px rgba(52,211,153,.16), 0 4px 14px -2px rgba(52,211,153,.6);}
+.set-row.fx-done .set-done.on{animation:donePop .38s var(--ease-spring) both !important;}
+.set-done:hover:not(.on){border-color:var(--good); color:var(--good);}
+.set-row input{transition:border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background-color var(--dur) var(--ease);}
+.set-row input:focus, .search-input:focus, .field input:focus, .field select:focus, .tpl-edit-field input:focus{outline:none; border-color:var(--accent-2); box-shadow:0 0 0 4px rgba(129,140,248,.18); background:rgba(129,140,248,.06);}
+
+/* set-complete burst (fx.js) */
+@keyframes burstOut{ from{transform:rotate(var(--a)) translateY(0) scale(1); opacity:1;} to{transform:rotate(var(--a)) translateY(calc(var(--d) * -1)) scale(.2); opacity:0;} }
+.fx-burst{position:fixed; width:0; height:0; z-index:90; pointer-events:none; --c:#34D399;}
+.fx-burst i{position:absolute; left:-2.5px; top:-2.5px; width:5px; height:5px; border-radius:50%; background:var(--c); box-shadow:0 0 8px var(--c); animation:burstOut .6s cubic-bezier(.2,.8,.3,1) forwards;}
+.fx-burst i:nth-child(even){--c:#A5B4FC; width:4px; height:4px;}
+.fx-confetti{position:fixed; inset:0; z-index:95; pointer-events:none; overflow:hidden;}
+.fx-confetti i{position:absolute; width:8px; height:12px; border-radius:2px; will-change:transform;}
+
+/* ---------- rest banner ---------- */
+.rest-banner{background:var(--grad); box-shadow:0 18px 40px -12px rgba(124,92,246,.75), 0 0 0 1px rgba(255,255,255,.12) inset; overflow:hidden;}
+.rest-banner::after{content:""; position:absolute; inset:0; background:linear-gradient(105deg, transparent 35%, rgba(255,255,255,.16) 50%, transparent 65%); background-size:250% 100%; animation:shimmer 3.2s linear infinite; pointer-events:none;}
+.rest-banner > *{position:relative; z-index:1;}
+@keyframes overPulse{ 0%,100%{box-shadow:0 18px 40px -12px rgba(251,113,133,.7), 0 0 0 0 rgba(251,113,133,.45);} 50%{box-shadow:0 18px 40px -12px rgba(251,113,133,.7), 0 0 0 10px rgba(251,113,133,0);} }
+.rest-banner.over{background:linear-gradient(135deg, #F43F5E, #FB7185 60%, #F97316); animation:restIn var(--dur-slow) var(--ease) both, overPulse 1.6s ease-in-out infinite;}
+.rest-time{font-weight:600; letter-spacing:-.01em;}
+.rest-bar{height:6px; background:rgba(0,0,0,.25);}
+.rest-bar > div{box-shadow:0 0 10px rgba(255,255,255,.8);}
+.rest-actions button{border-radius:10px;}
+.rest-actions button.skip{color:#6D28D9;}
+
+/* ---------- tab bar: glass + sliding indicator (fx.js) ---------- */
+.tabbar{background:rgba(22,24,32,.66); backdrop-filter:blur(18px) saturate(1.4); -webkit-backdrop-filter:blur(18px) saturate(1.4); border-color:rgba(255,255,255,.1); box-shadow:0 20px 50px -12px rgba(0,0,0,.8), var(--hairline);}
+.tab-ind{position:absolute; left:0; top:6px; bottom:6px; width:0; border-radius:999px; background:var(--grad); box-shadow:0 6px 20px -4px rgba(124,92,246,.75); transition:transform .45s var(--ease-spring), width .45s var(--ease); pointer-events:none; z-index:0;}
+.tab-ind.instant{transition:none;}
+.tabbar.has-ind button{position:relative; z-index:1;}
+.tabbar.has-ind button.active{background:transparent; color:#fff;}
+.tabbar button:hover:not(.active){color:var(--ink-dim);}
+.tabbar button:hover:not(.active) svg{transform:translateY(-2px);}
+.tabbar button.active svg{transform:scale(1.08);}
+
+/* ---------- sheets: spring in, slide out ---------- */
+@keyframes sheetUp{ from{transform:translateY(100%);} to{transform:translateY(0);} }
+@keyframes sheetDown{ from{transform:translateY(0); opacity:1;} to{transform:translateY(60%); opacity:0;} }
+@keyframes fadeOut{ from{opacity:1;} to{opacity:0;} }
+.sheet{background:rgba(3,4,6,.55); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);}
+.sheet-inner{background:linear-gradient(180deg, rgba(30,33,44,.96), rgba(12,13,18,.98) 140px); border-radius:26px 26px 0 0; border-top:1px solid rgba(255,255,255,.14); animation:sheetUp .42s cubic-bezier(.22,1.15,.36,1) both;}
+.sheet.closing{animation:fadeOut .22s var(--ease) both; pointer-events:none;}
+.sheet.closing .sheet-inner{animation:sheetDown .22s var(--ease) both;}
+.sheet-handle{width:42px; height:5px; background:rgba(255,255,255,.22);}
+.pick-row{border-radius:10px; padding-left:8px; padding-right:8px;}
+.pick-row:hover{background:rgba(129,140,248,.08);}
+
+/* ---------- toast ---------- */
+@keyframes toastOut{ to{opacity:0; transform:translate(-50%,10px) scale(.96);} }
+.toast{background:rgba(30,33,44,.85); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border-color:rgba(255,255,255,.14);}
+.toast.leaving{animation:toastOut .22s var(--ease) forwards;}
+.toast.celebrate{background:var(--grad); border-color:transparent; color:#fff; box-shadow:0 14px 36px -8px rgba(124,92,246,.8);}
+
+/* ---------- lists, rows, details ---------- */
+.ex-row, .session-head, details.cat-group summary{transition:background-color var(--dur) var(--ease), padding-left var(--dur) var(--ease);}
+.ex-row:hover{padding-left:20px; background:rgba(129,140,248,.06);}
+details.cat-group[open] summary{background:rgba(255,255,255,.02);}
+details.cat-group[open] .ex-row{animation:fadeRise .35s var(--ease) both;}
+details.cat-group[open] .ex-row:nth-child(-n+4){animation-delay:30ms;}
+details.cat-group[open] .ex-row:nth-child(n+5){animation-delay:70ms;}
+.session-card.open{border-color:rgba(129,140,248,.35);}
+
+/* ---------- calendar ---------- */
+.cal-cell{border-width:1px; border-radius:10px; background:rgba(255,255,255,.03);}
+.cal-cell:not(.empty):hover{transform:translateY(-2px); box-shadow:0 8px 18px -8px rgba(99,102,241,.6);}
+@keyframes todayRing{ 0%,100%{box-shadow:0 0 0 0 rgba(129,140,248,.5);} 50%{box-shadow:0 0 0 5px rgba(129,140,248,0);} }
+.cal-cell.today{border-width:1px; background:linear-gradient(160deg, rgba(99,102,241,.35), rgba(168,85,247,.18)); animation:todayRing 2.4s ease-in-out infinite !important;}
+.cal-dot{box-shadow:0 0 6px currentColor; color:var(--accent-2);}
+.cal-dot.friend{color:var(--steel);}
+
+/* ---------- auth ---------- */
+.auth-card{border-radius:24px; padding:32px 26px; box-shadow:0 30px 80px -20px rgba(0,0,0,.8), var(--hairline);}
+.auth-brand .mark{font-size:32px;}
+.auth-tabs{border-radius:999px;}
+.auth-tabs button{border-radius:999px;}
+.auth-tabs button.active{background:var(--grad); color:#fff; box-shadow:0 6px 18px -6px rgba(124,92,246,.7);}
+
+/* ---------- misc polish ---------- */
+.ex-demo{border-radius:var(--r-l);}
+.media-tile{transition:transform var(--dur) var(--ease);}
+.media-tile:hover{transform:scale(1.02);}
+.media-tile img{transition:transform .6s var(--ease);}
+.media-tile:hover img{transform:scale(1.06);}
+.pin-swipe{background:var(--grad);}
+.plan-card.joined{border-color:rgba(129,140,248,.5); box-shadow:0 0 0 1px rgba(129,140,248,.2), 0 12px 30px -14px rgba(99,102,241,.7);}
+.mv-wedge path{transition:fill-opacity var(--dur) var(--ease), transform .3s var(--ease);}
+.mv-wedge:hover path:not(.mv-empty){filter:brightness(1.2);}
+::-webkit-scrollbar{width:8px; height:8px;}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12); border-radius:99px;}
+::-webkit-scrollbar-track{background:transparent;}
+
+@media (prefers-reduced-motion: reduce){
+  body::before, body::after{animation:none !important;}
+  .home-tile{transform:none !important;}
+}
