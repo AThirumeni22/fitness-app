@@ -29,6 +29,7 @@ export function renderAuthScreen(root) {
               ${mode === "signup" ? "Create account" : "Sign in"}
             </button>
           </form>
+          ${mode === "signup" ? '<p class="auth-legal">After you sign up we\'ll ask for your name and show you our privacy notice, including how photos are shared with your friends.</p>' : ""}
           <p class="auth-foot">
             ${mode === "signup" ? "Already training with us?" : "New here?"}
             <button type="button" id="authSwitch" class="link-btn">${mode === "signup" ? "Sign in" : "Create an account"}</button>
