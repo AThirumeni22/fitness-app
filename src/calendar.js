@@ -95,9 +95,11 @@ export async function renderCalendar(ctx) {
         <h2>${MONTH_NAMES[month]} ${year}</h2>
         <button class="icon-btn" id="nextMonthBtn" title="Next month" aria-label="Next month">›</button>
       </div>
-      <div class="cal-dow-row">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
-      <div class="cal-grid">${cells}</div>
-      <div class="section-label" style="margin-top:6px;">Plan a session</div>
+      <div class="cal-wrap">
+        <div class="cal-dow-row">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
+        <div class="cal-grid">${cells}</div>
+      </div>
+      <div class="section-label">Plan a session</div>
       ${renderPlans(plans)}
     `;
 
@@ -138,7 +140,7 @@ export async function renderCalendar(ctx) {
         <p class="plan-who muted">${names.length ? ctx.escapeHtml(names.join(", ")) : "No one yet"}</p>
       </div>`;
     }).join("");
-    return cardsHtml + newBtnHtml;
+    return `<div class="plan-list">${cardsHtml}</div>` + newBtnHtml;
   }
 
   function bindPlans() {
@@ -341,13 +343,16 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
 
     openSheet(`
       <div class="sheet-title"><h3>${escapeHtml(prettyDate(dateKey))}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="stack">
       <div class="section-label">Workouts</div>
       <div class="dw-stack">${whoHtml}</div>
-      <div class="section-label mt">Photos &amp; Videos</div>
+      <div class="section-label">Photos &amp; videos</div>
       <div class="card">
         ${mediaHtml}
         <input type="file" id="dayMediaInput" accept="image/*,video/*" hidden>
-        <button class="btn btn-secondary btn-block" id="addMediaBtn" style="margin-top:10px;">+ Add a photo or video</button>
+        <button class="btn btn-secondary btn-block" id="addMediaBtn">+ Add a photo or video</button>
+        <p class="faint">Only you and your friends can see photos and videos posted here.</p>
+      </div>
       </div>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
