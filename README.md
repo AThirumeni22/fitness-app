@@ -1,4 +1,4 @@
-# SocialGym
+# Obonto
 
 A workout logger you and your friends can each sign into and keep your own
 training history in. Log sets and reps, get an auto-starting rest timer,
@@ -97,8 +97,15 @@ which is: read and write your own rows, never anyone else's.
   visibility that already existed via Row Level Security — there's no
   separate "share" step; finishing a workout is what makes it show up.
 - **Pin templates** — the star icon on any template (Exercises tab) pins
-  it as a quick-start tile at the top of the Train tab home screen, above
-  "Jump to." Handy for the 1-2 templates you actually run every week.
+  it as a quick-start tile on the Train tab home screen. Tap Start for a
+  normal session, or swipe the tile right to reveal "Guided."
+- **Muscles hit** — the home screen's radial chart shows total volume
+  (weight × reps) per muscle group for the last 30 days or all time; the
+  more rings a wedge fills, the more that group got relative to your
+  most-trained one.
+- **Update template after a workout** — finishing a workout started from a
+  template offers to save today's heaviest set (weight + reps) and set
+  count back into that template, with a before/after preview.
 - **Hide default templates** — the crossed-out-eye icon on Push/Pull/Leg
   Day (Exercises tab) hides that one from your list; nothing is deleted,
   and "Restore hidden default templates" in Profile settings brings them
@@ -112,7 +119,11 @@ which is: read and write your own rows, never anyone else's.
 - **Plan a session** — at the bottom of the Calendar tab, "Propose a time"
   is a single simple form: a title, a date, a time picked with a slider,
   and (optionally) one of your own templates so friends know the workout
-  in advance. Friends just tap "I'm in" — no multi-option poll to manage.
+  in advance. Friends tap "I'm in" (and "Back out" if plans change);
+  proposals disappear on their own once their time has passed.
+- **Day view** — tapping a calendar day shows each person's workout as a
+  card (time, sets, volume, exercises) and that day's photos/videos; tap
+  any photo to view it full screen in the app, swipe between them.
 - **Profile** — tap the small circle in the top bar to set the name and
   photo your friends see you as (stored avatar in the `avatars` bucket).
   It's also where your weight unit (kg/lb) and your default rest timer
