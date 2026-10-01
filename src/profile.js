@@ -52,11 +52,11 @@ export function openProfileSheet(ctx) {
         <input type="file" id="avatarInput" accept="image/*" hidden>
         <button class="btn btn-secondary btn-sm" id="pickAvatarBtn">Change photo</button>
       </div>
-      <div class="field"><label>Name</label><input type="text" id="displayNameInput" placeholder="What friends see" value="${escapeHtml(state.profile.displayName || "")}"></div>
-      <p class="muted" style="margin-bottom:14px;">Friends see this name instead of your email, in Friends, the Calendar, and gym-time polls.</p>
+      <div class="field"><label for="displayNameInput">Name</label><input type="text" id="displayNameInput" placeholder="What friends see" autocomplete="nickname" maxlength="40" value="${escapeHtml(state.profile.displayName || "")}"></div>
+      <p class="muted">Friends see this name instead of your email: in Friends, the Calendar, gym-time plans and shared templates.</p>
       <button class="btn btn-primary btn-block" id="saveProfileBtn">Save</button>
 
-      <div class="section-label mt">Settings</div>
+      <div class="section-label">Settings</div>
       <div class="field">
         <label>Weight unit</label>
         <div class="seg-toggle" id="unitToggle">
@@ -65,10 +65,10 @@ export function openProfileSheet(ctx) {
         </div>
       </div>
       <div class="field">
-        <label>Default rest timer (seconds)</label>
-        <input type="number" id="defaultRestInput" min="5" step="5" value="${state.restDuration}">
+        <label for="defaultRestInput">Default rest timer (seconds)</label>
+        <input type="number" inputmode="numeric" id="defaultRestInput" min="5" step="5" value="${state.restDuration}">
       </div>
-      <p class="muted" style="margin-bottom:14px;">Used whenever an exercise doesn't have its own rest time set in a template.</p>
+      <p class="muted">Used whenever an exercise doesn't have its own rest time set in a template.</p>
       ${(state.templatePrefs.hiddenBuiltin || []).length ? `
         <div class="field">
           <label>Default templates</label>
@@ -76,7 +76,9 @@ export function openProfileSheet(ctx) {
         </div>
       ` : ""}
 
-      <p class="muted" style="word-break:break-all;">Signed in as ${escapeHtml(user.email || "")}</p>
+      <div class="section-label">Privacy</div>
+      <button type="button" class="btn btn-secondary btn-block" id="privacyBtn">Read the privacy notice</button>
+      <p class="faint" style="overflow-wrap:anywhere;">Signed in as ${escapeHtml(user.email || "")}</p>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     document.getElementById("pickAvatarBtn").addEventListener("click", () => document.getElementById("avatarInput").click());
@@ -97,6 +99,7 @@ export function openProfileSheet(ctx) {
       }
     });
     document.getElementById("saveProfileBtn").addEventListener("click", save);
+    document.getElementById("privacyBtn").addEventListener("click", () => ctx.openPrivacy());
     const restoreBtn = document.getElementById("restoreTplBtn");
     if (restoreBtn) restoreBtn.addEventListener("click", () => { ctx.restoreBuiltinTemplates(); draw(); });
     document.querySelectorAll("#unitToggle button").forEach((b) => b.addEventListener("click", () => {
