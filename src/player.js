@@ -28,34 +28,34 @@ export function openTemplateEditor(ctx, template) {
           <div class="tpl-edit-head">
             <span class="nm">${escapeHtml(ctx.exName(id))}</span>
             <div class="tpl-edit-actions">
-              <button class="icon-btn move-up" data-i="${i}" title="Move up" aria-label="Move exercise up">↑</button>
-              <button class="icon-btn move-down" data-i="${i}" title="Move down" aria-label="Move exercise down">↓</button>
-              <button class="icon-btn remove-ex" data-i="${i}" title="Remove" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+              <button class="icon-btn sm move-up" data-i="${i}" title="Move up" aria-label="Move exercise up"${i === 0 ? " disabled" : ""}>↑</button>
+              <button class="icon-btn sm move-down" data-i="${i}" title="Move down" aria-label="Move exercise down"${i === ids.length - 1 ? " disabled" : ""}>↓</button>
+              <button class="icon-btn sm remove-ex" data-i="${i}" title="Remove" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
             </div>
           </div>
           <div class="tpl-edit-grid">
             <label class="tpl-edit-field">Sets
-              <input type="number" class="t-sets" data-i="${i}" value="${t.sets}" min="1">
+              <input type="number" inputmode="numeric" class="t-sets" data-i="${i}" value="${t.sets}" min="1">
             </label>
             <label class="tpl-edit-field">Reps
-              <input type="number" class="t-reps" data-i="${i}" value="${t.reps}" placeholder="—">
+              <input type="number" inputmode="numeric" class="t-reps" data-i="${i}" value="${t.reps}" placeholder="—">
             </label>
             <label class="tpl-edit-field">Weight (${state.unit})
               <input type="text" inputmode="decimal" autocomplete="off" class="t-weight" data-i="${i}" value="${ctx.fmtNum(t.weight)}" placeholder="—">
             </label>
             <label class="tpl-edit-field">Rest (sec)
-              <input type="number" class="t-rest" data-i="${i}" value="${t.rest}" min="0" step="5">
+              <input type="number" inputmode="numeric" class="t-rest" data-i="${i}" value="${t.rest}" min="0" step="5">
             </label>
           </div>
         </div>`;
-    }).join("") : '<p class="muted" style="margin-bottom:10px;">No exercises yet — add some below.</p>';
+    }).join("") : "";
 
     openSheet(`
       <div class="sheet-title"><h3>${isNew ? "New Template" : "Edit Template"}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="field"><label>Name</label><input type="text" id="tplNameInput" value="${escapeHtml(name)}" placeholder="e.g. Upper Body A"></div>
-      ${isBuiltIn ? '<p class="muted" style="margin-bottom:10px;">This is a built-in template — saving will create your own editable copy.</p>' : ""}
-      <div id="tplEditRows">${rowsHtml}</div>
-      <button class="btn btn-secondary btn-block" id="addExToTplBtn" style="margin-bottom:14px;">+ Add Exercise</button>
+      ${isBuiltIn ? '<p class="muted">This is a built-in template — saving will create your own editable copy.</p>' : ""}
+      ${ids.length ? `<div class="tpl-edit-list" id="tplEditRows">${rowsHtml}</div>` : '<p class="muted">No exercises yet — add some below.</p>'}
+      <button class="btn btn-secondary btn-block" id="addExToTplBtn">+ Add exercise</button>
       <button class="btn btn-primary btn-block" id="saveTplEditBtn">Save Template</button>
     `);
     bind();
