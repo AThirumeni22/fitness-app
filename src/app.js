@@ -135,9 +135,15 @@ export async function mountApp(root, user) {
     const t = document.getElementById("toast");
     if (!t) return;
     t.textContent = msg;
+    clearTimeout(toast._h); clearTimeout(toast._h2);
+    t.classList.remove("leaving");
+    // replay the entrance when a new message replaces a visible one
+    t.style.animation = "none"; void t.offsetWidth; t.style.animation = "";
     t.hidden = false;
-    clearTimeout(toast._h);
-    toast._h = setTimeout(() => { t.hidden = true; }, 2200);
+    toast._h = setTimeout(() => {
+      t.classList.add("leaving");
+      toast._h2 = setTimeout(() => { t.hidden = true; t.classList.remove("leaving"); }, 220);
+    }, 2200);
   }
 
   function avatarHtml() {
@@ -226,11 +232,19 @@ export async function mountApp(root, user) {
   function openSheet(html) {
     if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
     document.getElementById("sheetInner").innerHTML = '<div class="sheet-handle"></div>' + html;
-    document.getElementById("sheet").hidden = false;
+    const sh = document.getElementById("sheet");
+    clearTimeout(closeSheet._h);
+    sh.classList.remove("closing");
+    sh.hidden = false;
   }
   function closeSheet() {
     if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
-    document.getElementById("sheet").hidden = true;
+    const sh = document.getElementById("sheet");
+    if (sh.hidden) return;
+    // let the sheet slide away before hiding it
+    sh.classList.add("closing");
+    clearTimeout(closeSheet._h);
+    closeSheet._h = setTimeout(() => { sh.hidden = true; sh.classList.remove("closing"); }, 220);
   }
 
   let currentTab = "train";
