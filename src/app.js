@@ -11,6 +11,7 @@ import { renderCalendar } from "./calendar.js";
 import { openProfileSheet } from "./profile.js";
 import { openTemplateEditor } from "./player.js";
 import { muscleChartHtml } from "./musclechart.js";
+import { needsOnboarding, runOnboarding, openPrivacySheet } from "./onboarding.js";
 
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
@@ -25,9 +26,15 @@ export async function mountApp(root, user) {
       fetchExerciseLibrary()
     ]);
   } catch (err) {
-    root.innerHTML = `<div class="boot-loading err">Couldn't load your data: ${escapeHtml(err.message || String(err))}<br><button class="btn btn-secondary" id="retryBtn" style="margin-top:14px;">Retry</button></div>`;
+    root.innerHTML = `<div class="boot-loading err"><p>Couldn't load your data: ${escapeHtml(err.message || String(err))}</p><button class="btn btn-secondary" id="retryBtn">Retry</button></div>`;
     root.querySelector("#retryBtn").addEventListener("click", () => mountApp(root, user));
     return;
+  }
+
+  // First sign-in (no name yet) or privacy notice not yet accepted: run the
+  // welcome flow before showing the app. It resolves once both are saved.
+  if (needsOnboarding(profile, user)) {
+    profile = await runOnboarding(root, user, profile, db);
   }
 
   const ACTIVE_KEY = `trainlog.active.${user.id}`;
@@ -54,7 +61,8 @@ export async function mountApp(root, user) {
     restDuration: savedRestDuration,
     profile: { displayName: profile.display_name || "", avatarUrl: profile.avatar_url || "" },
     templatePrefs: Object.assign({ pinned: [], hiddenBuiltin: [] }, profile.template_prefs || {}),
-    friends: null
+    friends: null,
+    shares: []
   };
 
   function saveRestDuration(sec) {
@@ -214,6 +222,7 @@ export async function mountApp(root, user) {
   document.getElementById("sheet").addEventListener("click", (e) => {
     if (e.target.id === "sheet") closeSheet();
   });
+  bindSheetDrag();
   async function setUnit(unit) {
     if (unit === state.unit) return;
     state.unit = unit;
@@ -229,22 +238,106 @@ export async function mountApp(root, user) {
   });
 
   let activeDetailInterval = null;
+
+  // While a sheet is open the page behind it must not move. Plain
+  // `overflow:hidden` isn't enough on iOS Safari, so the body is pinned with
+  // position:fixed at the current scroll offset and restored on close.
+  let lockedScrollY = 0;
+  function lockScroll() {
+    if (document.body.classList.contains("scroll-locked")) return;
+    lockedScrollY = window.scrollY;
+    document.body.style.top = `-${lockedScrollY}px`;
+    document.body.classList.add("scroll-locked");
+  }
+  function unlockScroll() {
+    if (!document.body.classList.contains("scroll-locked")) return;
+    document.body.classList.remove("scroll-locked");
+    document.body.style.top = "";
+    window.scrollTo(0, lockedScrollY);
+  }
+
   function openSheet(html) {
     if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
-    document.getElementById("sheetInner").innerHTML = '<div class="sheet-handle"></div>' + html;
     const sh = document.getElementById("sheet");
+    const inner = document.getElementById("sheetInner");
+    const wasOpen = !sh.hidden && !sh.classList.contains("closing");
+    inner.innerHTML = '<div class="sheet-handle" aria-hidden="true"></div>' + html;
     clearTimeout(closeSheet._h);
     sh.classList.remove("closing");
+    inner.style.transform = "";
+    // swapping content inside an already-open sheet shouldn't replay the slide-up
+    if (wasOpen) inner.style.animation = "none"; else inner.style.animation = "";
+    if (!wasOpen) inner.scrollTop = 0;
     sh.hidden = false;
+    lockScroll();
   }
   function closeSheet() {
     if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
     const sh = document.getElementById("sheet");
-    if (sh.hidden) return;
+    if (sh.hidden || sh.classList.contains("closing")) return;
     // let the sheet slide away before hiding it
     sh.classList.add("closing");
     clearTimeout(closeSheet._h);
-    closeSheet._h = setTimeout(() => { sh.hidden = true; sh.classList.remove("closing"); }, 220);
+    closeSheet._h = setTimeout(() => {
+      sh.hidden = true;
+      sh.classList.remove("closing");
+      document.getElementById("sheetInner").style.transform = "";
+      unlockScroll();
+    }, 220);
+    unlockScrollSoon();
+  }
+  // Give the page its scroll back right away so a quick tap after closing works.
+  function unlockScrollSoon() { requestAnimationFrame(unlockScroll); }
+
+  // Pull the sheet down to dismiss it: from the handle/title anywhere, or
+  // from the content once it's scrolled to the top. Uses touch events so
+  // the drag can claim the gesture (preventDefault) before the page or the
+  // sheet's own content starts scrolling.
+  function bindSheetDrag() {
+    const inner = document.getElementById("sheetInner");
+    let startY = 0, lastY = 0, lastT = 0, vel = 0, dy = 0, dragging = false, armed = false;
+    inner.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.target;
+      const onGrip = !!(t.closest && t.closest(".sheet-handle, .sheet-title")) && !(t.closest && t.closest("button, input, select, textarea"));
+      armed = onGrip || inner.scrollTop <= 0;
+      if (!armed) return;
+      startY = lastY = e.touches[0].clientY; lastT = performance.now();
+      dy = 0; vel = 0; dragging = false;
+      inner._onGrip = onGrip;
+    }, { passive: true });
+    inner.addEventListener("touchmove", (e) => {
+      if (!armed) return;
+      const y = e.touches[0].clientY;
+      const move = y - startY;
+      if (!dragging) {
+        if (move > 6 && (inner._onGrip || inner.scrollTop <= 0)) {
+          dragging = true;
+          inner.classList.add("dragging");
+        } else if (move < -6 && !inner._onGrip) { armed = false; return; }
+        else return;
+      }
+      e.preventDefault();
+      const now = performance.now();
+      vel = (y - lastY) / Math.max(1, now - lastT);
+      lastY = y; lastT = now;
+      dy = Math.max(0, move);
+      inner.style.transform = `translateY(${dy}px)`;
+    }, { passive: false });
+    const end = () => {
+      if (!dragging) { armed = false; return; }
+      dragging = false; armed = false;
+      inner.classList.remove("dragging");
+      if (dy > Math.min(140, inner.offsetHeight * 0.3) || vel > 0.6) {
+        closeSheet();
+      } else {
+        inner.classList.add("snap");
+        inner.style.transform = "";
+        setTimeout(() => inner.classList.remove("snap"), 300);
+      }
+    };
+    inner.addEventListener("touchend", end);
+    inner.addEventListener("touchcancel", end);
   }
 
   let currentTab = "train";
@@ -252,7 +345,9 @@ export async function mountApp(root, user) {
     currentTab = tab;
     ["train", "history", "exercises", "friends", "calendar"].forEach((t) => { document.getElementById("tab-" + t).hidden = (t !== tab); });
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("active", b.getAttribute("data-tab") === tab));
+    window.scrollTo(0, 0);
     renderCurrentTab();
+    if (tab === "exercises") refreshShares(true);
   }
   function renderCurrentTab() {
     if (currentTab === "train") renderTrain();
@@ -329,10 +424,10 @@ export async function mountApp(root, user) {
 
     openSheet(`
       <div class="sheet-title"><h3>Update template?</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <p class="muted" style="margin-bottom:12px;">Save today's numbers into <strong>${escapeHtml(t.name)}</strong> so your next guided run starts from here.${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
+      <p class="muted">Save today's numbers into <strong>${escapeHtml(t.name)}</strong> so your next guided run starts from here.${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
       <div class="upd-list">${rowsHtml}</div>
-      <button class="btn btn-primary btn-block" id="updTplBtn" style="margin-top:14px;">Update template</button>
-      <button class="btn btn-ghost btn-block" id="skipUpdTplBtn" style="margin-top:8px;">Keep as is</button>
+      <button class="btn btn-primary btn-block" id="updTplBtn">Update template</button>
+      <button class="btn btn-ghost btn-block" id="skipUpdTplBtn">Keep as is</button>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     document.getElementById("skipUpdTplBtn").addEventListener("click", closeSheet);
@@ -461,9 +556,9 @@ export async function mountApp(root, user) {
 
     if (!ptr) {
       el.innerHTML = headHtml + `
-        <div class="card center">
-          <h2 style="font-size:20px; margin-bottom:8px;">All sets done</h2>
-          <p class="muted" style="margin-bottom:14px;">${doneSets} of ${totalSets} sets logged.</p>
+        <div class="card center player-card">
+          <h2>All sets done</h2>
+          <p class="muted">${doneSets} of ${totalSets} sets logged. Tap Finish to save.</p>
         </div>`;
       bindGuidedHead(a);
       return;
@@ -484,18 +579,20 @@ export async function mountApp(root, user) {
 
     el.innerHTML = headHtml + `
       <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
-      <div class="card center">
-        <h2 style="font-size:20px; margin-bottom:4px;">${escapeHtml(exName(ex.exerciseId))}</h2>
+      <div class="card center player-card">
+        <div class="stack-sm">
+        <h2>${escapeHtml(exName(ex.exerciseId))}</h2>
         <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${fmtNum(target.weight)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
+        </div>
         ${!playerArmed ? `
           <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
-          <button class="btn btn-ghost" id="skipSetBtn" style="margin-top:10px;">Skip this set</button>
+          <button class="btn btn-ghost btn-block" id="skipSetBtn">Skip this set</button>
         ` : `
           <div class="field-row">
             <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}"></div>
             <div class="field inline"><label>Reps</label><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" id="playerRepsInput" value="${defaultReps}"></div>
           </div>
-          <button class="btn btn-primary btn-block" id="completeSetBtn" style="padding:16px;">✓ Mark Set Done</button>
+          <button class="btn btn-primary btn-block btn-lg" id="completeSetBtn">✓ Mark Set Done</button>
         `}
       </div>
       <div class="player-actions">
@@ -608,7 +705,8 @@ export async function mountApp(root, user) {
     if (!state.active) {
       const pinnedTpl = visibleTemplates().filter((t) => isPinnedTemplate(t.id));
       const pinnedHtml = pinnedTpl.length ? `
-        <div class="section-label mt">Pinned templates</div>
+        <div class="section-label">Pinned templates</div>
+        <div class="pin-list">
         ${pinnedTpl.map((t) => `
           <div class="pin-swipe" data-id="${t.id}">
             <button class="pin-guided" data-id="${t.id}" aria-label="Start ${escapeHtml(t.name)} as a guided workout">
@@ -622,6 +720,7 @@ export async function mountApp(root, user) {
               <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
             </div>
           </div>`).join("")}
+        </div>
         <p class="pin-hint">Swipe a template right to start it guided</p>
       ` : "";
 
@@ -631,10 +730,10 @@ export async function mountApp(root, user) {
           <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
           <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
         </div>
-        <div class="section-label mt">Muscles hit</div>
+        <div class="section-label">Muscles hit</div>
         ${muscleChartHtml({ history: state.history, exCat, fromKg, unit: state.unit, days: mvDays })}
         ${pinnedHtml}
-        <div class="section-label mt">Jump to</div>
+        <div class="section-label">Jump to</div>
         <div class="home-tiles">
           <button class="home-tile" id="homeFriendsTile">
             <span class="ht-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg></span>
@@ -796,23 +895,23 @@ export async function mountApp(root, user) {
       const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
 
       if (!q && !activeCat) {
-        return `<div class="cat-chip-row">${chips}</div><p class="muted" style="margin-top:14px;">Search by name, or pick a category to browse.</p>`;
+        return `<div class="cat-chip-row">${chips}</div><p class="pick-note">Search by name, or pick a category to browse.</p>`;
       }
 
       const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
       const matches = q ? pool.filter((e) => matchesSearch(e, q)) : pool;
       const shown = matches.slice(0, MAX_RESULTS);
       let rowsHtml = shown.map((e) => `<div class="pick-row" data-id="${e.id}"><span>${escapeHtml(e.name)}</span><span class="pick-eq">${escapeHtml(e.equipment || "")}</span></div>`).join("");
-      if (!shown.length) rowsHtml = `<p class="muted" style="padding:12px 4px;">No matches.</p>`;
+      if (!shown.length) rowsHtml = `<p class="pick-note">No matches.</p>`;
       const moreNote = matches.length > MAX_RESULTS
-        ? `<p class="faint" style="font-size:11.5px; padding:8px 4px 0;">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
+        ? `<p class="pick-note">Showing ${MAX_RESULTS} of ${matches.length} — keep typing to narrow it down.</p>`
         : "";
-      return `<div class="cat-chip-row">${chips}</div>${rowsHtml}${moreNote}`;
+      return `<div class="stack"><div class="cat-chip-row">${chips}</div><div class="pick-list">${rowsHtml}</div>${moreNote}</div>`;
     }
 
     openSheet(`
       <div class="sheet-title"><h3>${title}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="field"><input type="text" id="pickerSearch" placeholder="Search exercises…"></div>
+      <div class="field"><input type="search" id="pickerSearch" placeholder="Search exercises…" autocomplete="off" enterkeyhint="search"></div>
       <div id="pickerBody">${draw("")}</div>
     `);
 
@@ -868,33 +967,49 @@ export async function mountApp(root, user) {
     renderRestBanner();
   }
 
+  // Built once per timer, then only the text and bar change each tick —
+  // re-creating the buttons 4× a second made taps get lost on phones.
   function renderRestBanner() {
     const el = document.getElementById("restBanner");
     if (!el) return;
     if (!state.timer) {
       el.hidden = true;
+      el.innerHTML = "";
       if (restTickHandle) { clearInterval(restTickHandle); restTickHandle = null; }
       return;
     }
+    if (!el.querySelector(".rest-time")) {
+      el.innerHTML = `
+        <div class="rest-top"><span class="rest-label">Resting</span><span class="rest-time num">0:00</span></div>
+        <div class="rest-bar"><div></div></div>
+        <div class="rest-actions">
+          <button type="button" data-a="-15">−15s</button>
+          <button type="button" data-a="+15">+15s</button>
+          <button type="button" class="skip" data-a="skip">Skip</button>
+        </div>`;
+      el.querySelector('[data-a="-15"]').addEventListener("click", () => adjustRestTimer(-15));
+      el.querySelector('[data-a="+15"]').addEventListener("click", () => adjustRestTimer(15));
+      el.querySelector('[data-a="skip"]').addEventListener("click", stopRestTimer);
+    }
     el.hidden = false;
+    const labelEl = el.querySelector(".rest-label");
+    const timeEl = el.querySelector(".rest-time");
+    const barEl = el.querySelector(".rest-bar > div");
+    const skipEl = el.querySelector('[data-a="skip"]');
     function tick() {
+      if (!state.timer) return;
       const remain = (state.timer.endsAt - Date.now()) / 1000;
       const over = remain <= 0;
       if (over && !state.timer.done) { state.timer.done = true; beep(); }
       el.classList.toggle("over", over);
       const pct = over ? 1 : Math.max(0, Math.min(1, remain / state.timer.duration));
-      el.innerHTML = `
-        <div class="rest-top"><span class="rest-label">${over ? "Over rest — go again?" : "Resting"}</span>
-        <span class="rest-time">${over ? "+" : ""}${fmtClock(over ? -remain : remain)}</span></div>
-        <div class="rest-bar"><div style="width:${pct * 100}%"></div></div>
-        <div class="rest-actions">
-          <button data-a="-15">−15s</button>
-          <button data-a="+15">+15s</button>
-          <button class="skip" data-a="skip">${over ? "Dismiss" : "Skip"}</button>
-        </div>`;
-      el.querySelector('[data-a="-15"]').addEventListener("click", () => adjustRestTimer(-15));
-      el.querySelector('[data-a="+15"]').addEventListener("click", () => adjustRestTimer(15));
-      el.querySelector('[data-a="skip"]').addEventListener("click", stopRestTimer);
+      const label = over ? "Over rest — go again?" : "Resting";
+      const time = `${over ? "+" : ""}${fmtClock(over ? -remain : remain)}`;
+      if (labelEl.textContent !== label) labelEl.textContent = label;
+      if (timeEl.textContent !== time) timeEl.textContent = time;
+      barEl.style.transform = `scaleX(${pct})`;
+      const skip = over ? "Dismiss" : "Skip";
+      if (skipEl.textContent !== skip) skipEl.textContent = skip;
     }
     tick();
     if (restTickHandle) clearInterval(restTickHandle);
@@ -982,7 +1097,7 @@ export async function mountApp(root, user) {
       }).join("");
     }
 
-    el.innerHTML = statHtml + chartHtml + '<div class="section-label">History</div>' + sessHtml;
+    el.innerHTML = statHtml + chartHtml + '<div class="section-label">History</div>' + (state.history.length ? `<div class="session-list">${sessHtml}</div>` : sessHtml);
 
     if (exWithHist.length) {
       document.getElementById("chartExSelect").addEventListener("change", (e) => { chartExId = e.target.value; renderHistory(); });
@@ -1013,78 +1128,140 @@ export async function mountApp(root, user) {
     return best;
   }
 
+  const ICON = {
+    star: (on) => `<svg viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M12 2l2.9 6.5L22 9.3l-5 4.9 1.2 7.1L12 17.8l-6.2 3.5L7 14.2 2 9.3l7.1-.8L12 2z"/></svg>`,
+    play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>',
+    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-10-8-10-8a18.5 18.5 0 015.06-5.94M9.9 4.24A10.4 10.4 0 0112 4c7 0 10 8 10 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><path d="M1 1l22 22"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>',
+    chev: '<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>'
+  };
+
+  function templateCardHtml(t) {
+    const pinned = isPinnedTemplate(t.id);
+    return `
+      <div class="tpl-list-card tpl" data-id="${t.id}">
+        <div class="tpl-top">
+          <div class="info">
+            <h4>${escapeHtml(t.name)}</h4>
+            <p>${escapeHtml(t.exerciseIds.map(exName).join(", ") || "No exercises yet")}</p>
+          </div>
+          <button class="icon-btn sm pin-tpl ${pinned ? "pinned" : ""}" data-id="${t.id}" title="${pinned ? "Unpin" : "Pin to home screen"}" aria-label="${pinned ? "Unpin template" : "Pin template to home screen"}">${ICON.star(pinned)}</button>
+          <button class="icon-btn sm share-tpl" data-id="${t.id}" title="Share with friends" aria-label="Share template with friends">${ICON.share}</button>
+        </div>
+        <div class="tpl-actions">
+          <button class="btn btn-primary btn-sm start-tpl2" data-id="${t.id}">Start</button>
+          <button class="btn btn-secondary btn-sm run-tpl" data-id="${t.id}">${ICON.play}Guided</button>
+          <button class="icon-btn sm edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template">${ICON.edit}</button>
+          ${t.isCustom
+            ? `<button class="icon-btn sm del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template">${ICON.x}</button>`
+            : `<button class="icon-btn sm hide-tpl" data-id="${t.id}" title="Hide this default template" aria-label="Hide this default template">${ICON.eyeOff}</button>`}
+        </div>
+      </div>`;
+  }
+
+  function shareCardHtml(sh) {
+    const n = (sh.exerciseIds || []).length;
+    return `
+      <div class="share-card" data-id="${sh.id}">
+        <div class="info">
+          <span class="tpl-badge">${ICON.share.replace("<svg", '<svg width="12" height="12"')}From ${escapeHtml(sh.senderName)}</span>
+          <h4>${escapeHtml(sh.name)}</h4>
+          <p>${n} exercise${n === 1 ? "" : "s"} · ${escapeHtml(sh.exerciseIds.slice(0, 3).map((id) => (sh.exerciseMeta[id] && sh.exerciseMeta[id].name) || exName(id)).join(", "))}${n > 3 ? ` +${n - 3} more` : ""}</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary btn-sm accept-share" data-id="${sh.id}">Add &amp; customise</button>
+          <button class="btn btn-secondary btn-sm decline-share" data-id="${sh.id}">Decline</button>
+        </div>
+      </div>`;
+  }
+
+  // Library groups render their rows only when opened (or while searching):
+  // 875+ rows rebuilt on every keystroke was what made typing lag on phones.
+  const LIB_SEARCH_LIMIT = 60;
+  function libraryRowsHtml(items) {
+    return items.map((e) => {
+      const pr = bestPr(e.id);
+      return `
+        <div class="ex-row" data-id="${e.id}">
+          <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
+          <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
+          ${e.isCustom
+            ? `<button class="icon-btn sm del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise">${ICON.x}</button>`
+            : ICON.chev}
+        </div>`;
+    }).join("");
+  }
+
+  function libraryItemsFor(cat) {
+    const q = exSearch.trim().toLowerCase();
+    let items = state.exercises.filter((e) => e.cat === cat);
+    if (exEquipment) items = items.filter((e) => (e.equipment || "other") === exEquipment);
+    if (q) items = items.filter((e) => matchesSearch(e, q));
+    return items;
+  }
+
+  function renderLibrary() {
+    const box = document.getElementById("exLibrary");
+    if (!box) return;
+    const searching = exSearch.trim().length > 0 || !!exEquipment;
+    const groups = CAT_ORDER.map((cat) => {
+      const items = libraryItemsFor(cat);
+      if (!items.length) return "";
+      const shown = searching ? items.slice(0, LIB_SEARCH_LIMIT) : [];
+      const more = searching && items.length > shown.length ? `<div class="lib-more">Showing ${shown.length} of ${items.length} — keep typing to narrow it down.</div>` : "";
+      return `<details class="cat-group" data-cat="${escapeHtml(cat)}" ${searching ? "open" : ""}><summary>${escapeHtml(cat)} <span class="count">${items.length}</span></summary>${searching ? libraryRowsHtml(shown) + more : ""}</details>`;
+    }).join("");
+    box.innerHTML = groups || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`;
+    box.querySelectorAll("details.cat-group").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open && !d.querySelector(".ex-row")) {
+        d.insertAdjacentHTML("beforeend", libraryRowsHtml(libraryItemsFor(d.getAttribute("data-cat"))));
+      }
+    }));
+  }
+
   function renderExercises() {
     const el = document.getElementById("tab-exercises");
-
     const visibleTpl = visibleTemplates();
-    const tplHtml = visibleTpl.length ? visibleTpl.map((t) => {
-      const pinned = isPinnedTemplate(t.id);
-      return `
-      <div class="tpl-list-card" style="flex-wrap:wrap;">
-        <div class="info"><h4>${escapeHtml(t.name)}</h4><p>${escapeHtml(t.exerciseIds.map(exName).join(", "))}</p></div>
-        <button class="icon-btn pin-tpl ${pinned ? "pinned" : ""}" data-id="${t.id}" title="${pinned ? "Unpin" : "Pin to home screen"}" aria-label="${pinned ? "Unpin template" : "Pin template to home screen"}"><svg viewBox="0 0 24 24" fill="${pinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M12 2l2.9 6.5L22 9.3l-5 4.9 1.2 7.1L12 17.8l-6.2 3.5L7 14.2 2 9.3l7.1-.8L12 2z"/></svg></button>
-        <button class="icon-btn run-tpl" data-id="${t.id}" title="Run guided" aria-label="Run guided"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg></button>
-        <button class="icon-btn edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
-        <button class="btn btn-secondary btn-sm start-tpl2" data-id="${t.id}">Start</button>
-        ${t.isCustom
-          ? `<button class="icon-btn del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
-          : `<button class="icon-btn hide-tpl" data-id="${t.id}" title="Hide this default template" aria-label="Hide this default template"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-10-8-10-8a18.5 18.5 0 015.06-5.94M9.9 4.24A10.4 10.4 0 0112 4c7 0 10 8 10 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><path d="M1 1l22 22"/></svg></button>`}
-      </div>`;
-    }).join('<div style="height:8px"></div>') : '<p class="muted">No templates yet.</p>';
-
-    const byCat = {};
-    CAT_ORDER.forEach((c) => { byCat[c] = []; });
-    state.exercises.forEach((e) => { (byCat[e.cat] = byCat[e.cat] || []).push(e); });
-    const q = exSearch.trim().toLowerCase();
-    const searching = q.length > 0;
-
+    const tplHtml = visibleTpl.length
+      ? `<div class="tpl-list">${visibleTpl.map(templateCardHtml).join("")}</div>`
+      : '<div class="card"><p class="muted">No templates yet — tap New to build one.</p></div>';
+    const sharesHtml = state.shares.length ? `
+      <div class="section-label">Shared with you <span class="count">${state.shares.length}</span></div>
+      <div class="stack-sm">${state.shares.map(shareCardHtml).join("")}</div>` : "";
     const eqChipsHtml = EQUIPMENT_GROUPS.map((g) => `<button class="cat-chip ${exEquipment === g.key ? "active" : ""}" data-eq="${g.key}">${escapeHtml(g.label)}</button>`).join("");
 
-    const groupsHtml = CAT_ORDER.map((cat) => {
-      let items = byCat[cat] || [];
-      if (exEquipment) items = items.filter((e) => (e.equipment || "other") === exEquipment);
-      if (q) items = items.filter((e) => matchesSearch(e, q));
-      if (!items.length) return "";
-      const rows = items.map((e) => {
-        const pr = bestPr(e.id);
-        return `
-          <div class="ex-row" data-id="${e.id}">
-            <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
-            <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
-            ${e.isCustom
-              ? `<button class="icon-btn del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`
-              : `<svg class="chev-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`}
-          </div>`;
-      }).join("");
-      return `<details class="cat-group" ${searching || exEquipment ? "open" : ""}><summary>${escapeHtml(cat)} <span class="count">${items.length}</span></summary>${rows}</details>`;
-    }).join("");
-
     el.innerHTML = `
-      <div style="display:flex; align-items:center; justify-content:space-between;"><h2 style="font-size:19px;">Templates</h2>
-      <button class="btn btn-secondary btn-sm" id="newTplBtn">+ New</button></div>
+      ${sharesHtml}
+      <div class="page-head"><h2>Templates</h2><button class="btn btn-secondary btn-sm" id="newTplBtn">+ New</button></div>
       ${tplHtml}
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;"><h2 style="font-size:19px;">Library</h2>
-      <button class="btn btn-secondary btn-sm" id="newExBtn">+ Add Custom</button></div>
-      <input type="text" class="search-input" id="exSearchInput" placeholder="Search 875+ exercises…" value="${escapeHtml(exSearch)}">
-      <div class="cat-chip-row">${eqChipsHtml}</div>
-      ${groupsHtml || `<p class="muted">No exercises match "${escapeHtml(exSearch)}".</p>`}
+      <div class="page-head"><h2>Library</h2><button class="btn btn-secondary btn-sm" id="newExBtn">+ Add custom</button></div>
+      <input type="search" class="search-input" id="exSearchInput" placeholder="Search 875+ exercises…" value="${escapeHtml(exSearch)}" autocomplete="off" enterkeyhint="search">
+      <div class="cat-chip-row" id="eqChips">${eqChipsHtml}</div>
+      <div class="lib-groups" id="exLibrary"></div>
     `;
+    renderLibrary();
 
     document.getElementById("newTplBtn").addEventListener("click", () => openTemplateEditor(ctx, null));
     document.getElementById("newExBtn").addEventListener("click", openCustomExerciseForm);
+    let searchT = null;
     document.getElementById("exSearchInput").addEventListener("input", (e) => {
       exSearch = e.target.value;
-      renderExercises();
-      const inp = document.getElementById("exSearchInput");
-      inp.focus(); inp.setSelectionRange(exSearch.length, exSearch.length);
+      clearTimeout(searchT);
+      searchT = setTimeout(renderLibrary, 120);
     });
     el.querySelectorAll(".cat-chip[data-eq]").forEach((b) => b.addEventListener("click", () => {
       exEquipment = exEquipment === b.getAttribute("data-eq") ? null : b.getAttribute("data-eq");
-      renderExercises();
+      el.querySelectorAll(".cat-chip[data-eq]").forEach((c) => c.classList.toggle("active", c.getAttribute("data-eq") === exEquipment));
+      renderLibrary();
     }));
+
     el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
     el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id"), true); setTab("train"); }));
     el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
+    el.querySelectorAll(".share-tpl").forEach((b) => b.addEventListener("click", () => openShareSheet(byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".pin-tpl").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       togglePinTemplate(b.getAttribute("data-id"));
@@ -1102,18 +1279,157 @@ export async function mountApp(root, user) {
         renderExercises(); toast("Template deleted");
       } catch (err) { toast("Couldn't delete template"); }
     }));
-    el.querySelectorAll(".del-ex").forEach((b) => b.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const id = b.getAttribute("data-id");
-      try {
-        await db.deleteCustomExercise(id);
-        state.exercises = state.exercises.filter((e2) => e2.id !== id);
-        renderExercises(); toast("Exercise removed");
-      } catch (err) { toast("Couldn't delete exercise"); }
-    }));
-    el.querySelectorAll(".ex-row").forEach((row) => row.addEventListener("click", () => {
-      openExerciseDetail(byId(state.exercises, row.getAttribute("data-id")));
-    }));
+    el.querySelectorAll(".accept-share").forEach((b) => b.addEventListener("click", () => acceptShare(b.getAttribute("data-id"), b)));
+    el.querySelectorAll(".decline-share").forEach((b) => b.addEventListener("click", () => declineShare(b.getAttribute("data-id"))));
+
+    // library rows are added lazily, so listen once on the container
+    const lib = document.getElementById("exLibrary");
+    lib.addEventListener("click", async (e) => {
+      const del = e.target.closest(".del-ex");
+      if (del) {
+        e.stopPropagation();
+        const id = del.getAttribute("data-id");
+        try {
+          await db.deleteCustomExercise(id);
+          state.exercises = state.exercises.filter((e2) => e2.id !== id);
+          renderLibrary(); toast("Exercise removed");
+        } catch (err) { toast("Couldn't delete exercise"); }
+        return;
+      }
+      const row = e.target.closest(".ex-row");
+      if (row) openExerciseDetail(byId(state.exercises, row.getAttribute("data-id")));
+    });
+  }
+
+  /* ---------- template sharing ---------- */
+  async function loadFriendsList() {
+    if (!state.friends) {
+      try { state.friends = await db.listFriendships(user.id); }
+      catch (e) { state.friends = { accepted: [], incoming: [], outgoing: [] }; }
+    }
+    return state.friends.accepted;
+  }
+
+  async function openShareSheet(t) {
+    if (!t) return;
+    openSheet(`
+      <div class="sheet-title"><h3>Share template</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close">${ICON.x}</button></div>
+      <p class="muted">Loading your friends…</p>`);
+    document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    const friends = await loadFriendsList();
+    const picked = new Set();
+    function draw() {
+      const listHtml = friends.length
+        ? `<div class="pick-list">${friends.map((r) => {
+            const nm = (r.otherProfile && r.otherProfile.display_name) || "Friend";
+            const on = picked.has(r.otherId);
+            return `<button type="button" class="friend-pick${on ? " on" : ""}" data-id="${r.otherId}" aria-pressed="${on}">
+              <span class="avatar-sm">${r.otherProfile && r.otherProfile.avatar_url ? `<img src="${r.otherProfile.avatar_url}" alt="">` : escapeHtml(nm.charAt(0).toUpperCase())}</span>
+              <span class="nm">${escapeHtml(nm)}</span>
+              <span class="chk">${ICON.check}</span>
+            </button>`;
+          }).join("")}</div>`
+        : `<div class="card"><p class="muted">You haven't added any friends yet. Add someone in the Friends tab, then share from here.</p><button class="btn btn-secondary btn-block" id="goFriendsBtn">Go to Friends</button></div>`;
+      openSheet(`
+        <div class="sheet-title"><h3>Share “${escapeHtml(t.name)}”</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close">${ICON.x}</button></div>
+        <p class="muted">Friends get their own copy with your sets, reps and weights as a starting point — they can change anything without touching yours.</p>
+        ${listHtml}
+        ${friends.length ? `<button class="btn btn-primary btn-block" id="sendShareBtn"${picked.size ? "" : " disabled"}>${picked.size ? `Send to ${picked.size} friend${picked.size === 1 ? "" : "s"}` : "Pick at least one friend"}</button>` : ""}
+      `);
+      document.getElementById("sheetClose").addEventListener("click", closeSheet);
+      const go = document.getElementById("goFriendsBtn");
+      if (go) go.addEventListener("click", () => { closeSheet(); setTab("friends"); });
+      document.querySelectorAll(".friend-pick").forEach((b) => b.addEventListener("click", () => {
+        const id = b.getAttribute("data-id");
+        if (picked.has(id)) picked.delete(id); else picked.add(id);
+        draw();
+      }));
+      const send = document.getElementById("sendShareBtn");
+      if (send) send.addEventListener("click", async () => {
+        send.disabled = true; send.textContent = "Sending…";
+        const meta = {};
+        t.exerciseIds.forEach((id) => { const e = byId(state.exercises, id); if (e) meta[id] = { name: e.name, cat: e.cat, custom: !!e.isCustom }; });
+        try {
+          await db.shareTemplate(user.id, [...picked], { name: t.name, exerciseIds: t.exerciseIds, targets: t.targets || {}, exerciseMeta: meta, unit: state.unit });
+          closeSheet();
+          toast(picked.size === 1 ? "Template shared" : `Shared with ${picked.size} friends`);
+        } catch (err) {
+          toast(/template_shares/.test(err.message || "") ? "Sharing isn't set up yet — run migration_5 in Supabase" : "Couldn't share: " + (err.message || String(err)));
+          send.disabled = false; send.textContent = `Send to ${picked.size} friend${picked.size === 1 ? "" : "s"}`;
+        }
+      });
+    }
+    draw();
+  }
+
+  async function refreshShares(rerender) {
+    try {
+      const shares = await db.listIncomingShares(user.id);
+      const changed = shares.length !== state.shares.length || shares.some((x, i) => !state.shares[i] || state.shares[i].id !== x.id);
+      state.shares = shares;
+      updateShareBadge();
+      if (changed && rerender && currentTab === "exercises") renderExercises();
+      return changed;
+    } catch (e) { return false; } // table not created yet → sharing just stays hidden
+  }
+
+  function updateShareBadge() {
+    const btn = document.querySelector('.tabbar button[data-tab="exercises"]');
+    if (!btn) return;
+    let dot = btn.querySelector(".tab-badge");
+    if (state.shares.length && !dot) { dot = document.createElement("i"); dot.className = "tab-badge"; btn.appendChild(dot); }
+    if (!state.shares.length && dot) dot.remove();
+  }
+
+  async function acceptShare(id, btn) {
+    const sh = state.shares.find((x) => x.id === id);
+    if (!sh) return;
+    if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+    try {
+      // The sender's own custom exercises don't exist for you yet, so make
+      // matching ones in your library and point the template at those.
+      const idMap = {};
+      for (const exId of sh.exerciseIds) {
+        if (byId(state.exercises, exId)) continue;
+        const m = sh.exerciseMeta[exId] || {};
+        const existing = state.exercises.find((e) => e.isCustom && e.name === (m.name || "Exercise"));
+        if (existing) { idMap[exId] = existing.id; continue; }
+        const created = await db.addCustomExercise(user.id, m.name || "Exercise", m.cat || CAT_ORDER[0]);
+        state.exercises.push(created);
+        idMap[exId] = created.id;
+      }
+      // Weights are stored in whatever unit the sender uses; convert to yours.
+      const conv = (w) => (w == null || w === "" || sh.unit === state.unit) ? w : roundDisp(fromKg(toKg(w, sh.unit), state.unit));
+      const ids = sh.exerciseIds.map((x) => idMap[x] || x);
+      const targets = {};
+      sh.exerciseIds.forEach((x) => {
+        const tg = (sh.targets || {})[x];
+        if (tg) targets[idMap[x] || x] = { ...tg, weight: conv(tg.weight) };
+      });
+      const taken = new Set(state.templates.map((t) => t.name));
+      let name = sh.name;
+      if (taken.has(name)) name = `${sh.name} (${sh.senderName})`;
+      const created = await db.addTemplate(user.id, name, ids, targets);
+      state.templates.push(created);
+      await db.respondToShare(id, "accepted");
+      state.shares = state.shares.filter((x) => x.id !== id);
+      updateShareBadge();
+      renderExercises();
+      toast("Added — set the reps and weights that suit you");
+      openTemplateEditor(ctx, created);
+    } catch (err) {
+      toast("Couldn't add that template: " + (err.message || String(err)));
+      if (btn) { btn.disabled = false; btn.textContent = "Add & customise"; }
+    }
+  }
+
+  async function declineShare(id) {
+    try {
+      await db.respondToShare(id, "declined");
+      state.shares = state.shares.filter((x) => x.id !== id);
+      updateShareBadge();
+      renderExercises();
+    } catch (err) { toast("Couldn't update that"); }
   }
 
   function openExerciseDetail(ex) {
@@ -1185,7 +1501,8 @@ export async function mountApp(root, user) {
     openExercisePicker: renderPickerSheet,
     refreshTopbar,
     setUnit, saveRestDuration,
-    isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates
+    isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates,
+    openPrivacy: () => openPrivacySheet({ openSheet, closeSheet })
   };
 
   /* ---------- init ---------- */
@@ -1195,4 +1512,11 @@ export async function mountApp(root, user) {
   document.getElementById("dateTag").textContent = `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
   setTab("train");
   renderRestBanner();
+  // Check for templates friends have shared; nudge once if there are any.
+  refreshShares(false).then(() => {
+    if (state.shares.length) {
+      const n = state.shares.length;
+      toast(n === 1 ? `${state.shares[0].senderName} shared a template with you` : `${n} templates shared with you`);
+    }
+  });
 }
