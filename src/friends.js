@@ -78,41 +78,41 @@ export async function renderFriends(ctx) {
       ? data.incoming.map((r) => row(r,
           `<button class="btn btn-primary btn-sm accept-btn" data-id="${r.id}">Accept</button>
            <button class="icon-btn decline-btn" data-id="${r.id}" title="Decline" aria-label="Decline request"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
-          "wants to be friends")).join('<div style="height:8px"></div>')
+          "wants to be friends")).join("")
       : "";
 
     const outgoingHtml = data.outgoing.length
       ? data.outgoing.map((r) => row(r,
           `<button class="icon-btn cancel-btn" data-id="${r.id}" title="Cancel request" aria-label="Cancel request"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
-          "Request sent — waiting")).join('<div style="height:8px"></div>')
+          "Request sent — waiting")).join("")
       : "";
 
     const friendsHtml = data.accepted.length
       ? data.accepted.map((r) => row(r,
           `<button class="icon-btn remove-btn" data-id="${r.id}" title="Remove friend" aria-label="Remove friend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`,
-          "Friends")).join('<div style="height:8px"></div>')
-      : '<p class="muted">No friends yet — add one by email below.</p>';
+          "Friends")).join("")
+      : '<div class="card"><p class="muted">No friends yet — add one by email below.</p></div>';
 
     const feedHtml = data.accepted.length ? `
       <div class="section-label">Recent activity</div>
-      ${feed.length ? feed.map(feedCard).join("") : '<div class="card"><p class="muted">No workouts from you or your friends in the last three weeks.</p></div>'}
+      ${feed.length ? `<div class="stack-sm">${feed.map(feedCard).join("")}</div>` : '<div class="card"><p class="muted">No workouts from you or your friends in the last three weeks.</p></div>'}
     ` : "";
 
     // Order: incoming requests (need action) → your friends → their recent
     // workouts → add a friend → requests you've sent.
     el.innerHTML = `
-      ${incomingHtml ? `<div class="section-label">Requests</div>${incomingHtml}` : ""}
-      <div class="section-label"${incomingHtml ? ' style="margin-top:6px;"' : ""}>Friends</div>
-      ${friendsHtml}
-      ${feedHtml ? `<div style="height:10px"></div>${feedHtml}` : ""}
-      <div class="card" style="margin-top:6px;">
-        <h2 style="font-size:19px; margin-bottom:10px;">Add a friend</h2>
-        <p class="muted" style="margin-bottom:10px;">They need an Obonto account already — add them by the email they signed up with.</p>
-        <div class="field" style="margin-bottom:8px;"><input type="email" id="friendEmailInput" placeholder="their.email@example.com"></div>
-        <button class="btn btn-primary btn-block" id="sendReqBtn">Send Request</button>
-        <p class="muted" id="addFriendMsg" style="margin-top:8px; min-height:16px;"></p>
+      ${incomingHtml ? `<div class="section-label">Requests</div><div class="stack-sm">${incomingHtml}</div>` : ""}
+      <div class="section-label">Friends</div>
+      ${data.accepted.length ? `<div class="stack-sm">${friendsHtml}</div>` : friendsHtml}
+      ${feedHtml}
+      <div class="section-label">Add a friend</div>
+      <div class="card">
+        <p class="muted">They need an Obonto account already — add them by the email they signed up with.</p>
+        <div class="field"><label for="friendEmailInput" class="sr-only">Friend's email</label><input type="email" id="friendEmailInput" placeholder="their.email@example.com" autocomplete="off" autocapitalize="off" inputmode="email" enterkeyhint="send"></div>
+        <button class="btn btn-primary btn-block" id="sendReqBtn">Send request</button>
+        <p class="muted" id="addFriendMsg" hidden></p>
       </div>
-      ${outgoingHtml ? `<div class="section-label" style="margin-top:6px;">Sent</div>${outgoingHtml}` : ""}
+      ${outgoingHtml ? `<div class="section-label">Sent</div><div class="stack-sm">${outgoingHtml}</div>` : ""}
     `;
 
     document.getElementById("sendReqBtn").addEventListener("click", async () => {
@@ -120,6 +120,7 @@ export async function renderFriends(ctx) {
       const msg = document.getElementById("addFriendMsg");
       const email = input.value.trim();
       if (!email) return;
+      msg.hidden = false;
       msg.textContent = "Searching…";
       try {
         const found = await ctx.db.findUserByEmail(email);
