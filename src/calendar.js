@@ -178,7 +178,14 @@ export async function renderCalendar(ctx) {
       }
     }));
     el.querySelectorAll(".del-plan").forEach((b) => b.addEventListener("click", async () => {
-      if (!confirm("Cancel this session? Everyone who's in will be notified.")) return;
+      const ok = await ctx.confirm({
+        title: "Cancel this session?",
+        message: "Everyone who said they're in will be notified.",
+        confirmText: "Cancel session",
+        cancelText: "Keep it",
+        danger: true
+      });
+      if (!ok) return;
       try { await ctx.db.deleteGymPlan(b.getAttribute("data-id")); ctx.toast("Session cancelled"); renderCalendar(ctx); }
       catch (err) { ctx.toast("Couldn't cancel that"); }
     }));
@@ -192,54 +199,226 @@ function timeLabel(mins) {
   return `${h}:${m < 10 ? "0" : ""}${m} ${ampm}`;
 }
 
-// One date, one time (picked with a slider), one optional template — kept
-// deliberately simple so proposing a session is a 10-second, no-friction
-// action instead of a small poll-building exercise.
+const TITLE_IDEAS = ["Gym session", "Push day", "Pull day", "Leg day", "Upper body", "Cardio"];
+const TIME_PRESETS = [
+  { label: "Morning", mins: 7 * 60 },
+  { label: "Lunch", mins: 12 * 60 },
+  { label: "After work", mins: 17 * 60 + 30 },
+  { label: "Evening", mins: 19 * 60 }
+];
+const STRIP_DAYS = 14;
+
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function hhmm(mins) { return `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`; }
+
+// Built for thumbs: tap a day from a scrolling row (or "More dates" for
+// anything further out), set the time with big −/+ buttons, a preset, or by
+// tapping the time to get the phone's own time wheel. No sliders — they
+// fought with the sheet's pull-to-close gesture and were fiddly to hit.
 function openNewPlanSheet(ctx, onDone) {
   const { openSheet, closeSheet, toast, escapeHtml, state } = ctx;
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
-  let minutes = 18 * 60; // default 6:00 PM
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MONS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  const now = new Date();
+  const todayKey = dateKeyFromDate(now);
+  let minutes = 18 * 60; // 6:00 PM
+  // Too late for 6 PM today → default to tomorrow.
+  let dayKey = now.getHours() * 60 + now.getMinutes() > minutes - 15 ? dateKeyFromDate(addDays(now, 1)) : todayKey;
+  let showMoreDates = false;
+
+  function keyToDate(key) { return new Date(key + "T00:00:00"); }
+  function chosenDate() {
+    const dt = keyToDate(dayKey);
+    dt.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    return dt;
+  }
+  function dayName(key) {
+    if (key === todayKey) return "Today";
+    if (key === dateKeyFromDate(addDays(now, 1))) return "Tomorrow";
+    const d = keyToDate(key);
+    return `${DAYS[d.getDay()]}, ${MONS[d.getMonth()]} ${d.getDate()}`;
+  }
 
   function draw() {
+    const pills = [];
+    for (let i = 0; i < STRIP_DAYS; i++) {
+      const d = addDays(now, i);
+      const key = dateKeyFromDate(d);
+      const top = i === 0 ? "Today" : i === 1 ? "Tmrw" : DAYS[d.getDay()];
+      pills.push(`<button type="button" class="day-pill" data-key="${key}" aria-label="${dayName(key)}">
+        <span class="dp-top">${top}</span><span class="dp-num">${d.getDate()}</span><span class="dp-mon">${MONS[d.getMonth()]}</span>
+      </button>`);
+    }
     const tplOptsHtml = `<option value="">No specific template</option>` +
       (state.templates || []).map((t) => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("");
+
     openSheet(`
       <div class="sheet-title"><h3>Propose a Time</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="field"><label>Title</label><input type="text" id="planTitleInput" placeholder="e.g. Leg day?" value="Gym session"></div>
-      <div class="field"><label>Date</label><input type="date" id="planDateInput" value="${dateStr}"></div>
+
       <div class="field">
-        <label>Time — <span id="timeLabelOut">${timeLabel(minutes)}</span></label>
-        <input type="range" id="planTimeSlider" class="time-slider" min="300" max="1380" step="15" value="${minutes}">
+        <label for="planTitleInput">What</label>
+        <input type="text" id="planTitleInput" placeholder="e.g. Leg day" maxlength="60" value="Gym session" autocomplete="off">
+        <div class="chip-wrap" id="titleChips">
+          ${TITLE_IDEAS.map((t) => `<button type="button" class="pick-chip" data-title="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join("")}
+        </div>
       </div>
-      <div class="field"><label>Template (optional)</label><select id="planTplSelect">${tplOptsHtml}</select></div>
-      <button class="btn btn-primary btn-block" id="savePlanBtn">Propose</button>
+
+      <div class="field">
+        <span class="field-label">Day</span>
+        <div class="day-strip" id="dayStrip" data-nodrag>
+          ${pills.join("")}
+        </div>
+        <button type="button" class="link-btn more-dates-btn" id="moreDatesBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <span id="moreDatesLabel">Pick a later date</span>
+        </button>
+        <div class="more-dates" id="moreDates" hidden>
+          <input type="date" class="date-native" id="planDateInput" min="${todayKey}" value="${dayKey}" aria-label="Pick a date">
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Time</span>
+        <div class="time-picker">
+          <button type="button" class="tp-step" data-step="-15" aria-label="15 minutes earlier">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/></svg>
+          </button>
+          <label class="tp-display">
+            <span class="tp-time" id="tpTime"></span>
+            <span class="tp-hint">Tap to choose</span>
+            <input type="time" id="tpNative" step="300" aria-label="Time">
+          </label>
+          <button type="button" class="tp-step" data-step="15" aria-label="15 minutes later">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+        <div class="preset-grid" id="timePresets">
+          ${TIME_PRESETS.map((p) => `<button type="button" class="pick-chip preset" data-mins="${p.mins}"><span>${p.label}</span><span class="faint">${timeLabel(p.mins)}</span></button>`).join("")}
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="planTplSelect">Workout (optional)</label>
+        <select id="planTplSelect">${tplOptsHtml}</select>
+      </div>
+
+      <div class="plan-summary" id="planSummary" aria-live="polite"></div>
+      <button class="btn btn-primary btn-block" id="savePlanBtn">Propose to friends</button>
     `);
+
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
-    document.getElementById("planTimeSlider").addEventListener("input", (e) => {
-      minutes = parseInt(e.target.value, 10);
-      document.getElementById("timeLabelOut").textContent = timeLabel(minutes);
+
+    const titleInput = document.getElementById("planTitleInput");
+    titleInput.addEventListener("input", refresh);
+    document.querySelectorAll("#titleChips .pick-chip").forEach((b) => b.addEventListener("click", () => {
+      titleInput.value = b.getAttribute("data-title");
+      refresh();
+    }));
+
+    document.querySelectorAll("#dayStrip .day-pill[data-key]").forEach((b) => b.addEventListener("click", () => {
+      dayKey = b.getAttribute("data-key");
+      showMoreDates = false;
+      refresh();
+    }));
+    document.getElementById("moreDatesBtn").addEventListener("click", () => {
+      showMoreDates = !showMoreDates;
+      refresh();
+      if (showMoreDates) {
+        const inp = document.getElementById("planDateInput");
+        try { inp.showPicker(); } catch (e) { inp.focus(); }
+      }
     });
+    document.getElementById("planDateInput").addEventListener("change", (e) => {
+      if (e.target.value) { dayKey = e.target.value; refresh(); }
+    });
+
+    // −/+ step 15 min; hold to keep going.
+    document.querySelectorAll(".tp-step").forEach((b) => {
+      const step = parseInt(b.getAttribute("data-step"), 10);
+      let holdT = null, repT = null;
+      const stop = () => { clearTimeout(holdT); clearInterval(repT); holdT = repT = null; };
+      b.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        nudge(step);
+        holdT = setTimeout(() => { repT = setInterval(() => nudge(step), 110); }, 400);
+      });
+      ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => b.addEventListener(ev, stop));
+      // Keyboard (Enter/Space) still works; pointer taps are handled above.
+      b.addEventListener("click", (e) => { if (e.detail === 0) nudge(step); });
+    });
+    document.getElementById("tpNative").addEventListener("change", (e) => {
+      const [h, m] = (e.target.value || "").split(":").map((n) => parseInt(n, 10));
+      if (!isNaN(h) && !isNaN(m)) { minutes = h * 60 + m; refresh(); }
+    });
+    document.querySelectorAll("#timePresets .preset").forEach((b) => b.addEventListener("click", () => {
+      minutes = parseInt(b.getAttribute("data-mins"), 10);
+      refresh();
+    }));
+
+    document.getElementById("planTplSelect").addEventListener("change", (e) => {
+      // Picking a workout names the session after it, unless a title was typed.
+      const v = e.target.value;
+      if (v && (!titleInput.value.trim() || TITLE_IDEAS.includes(titleInput.value.trim()))) titleInput.value = v;
+      refresh();
+    });
+
     document.getElementById("savePlanBtn").addEventListener("click", save);
+    refresh();
+    // Start with the chosen day centred (Today/Tomorrow just show the start).
+    const strip = document.getElementById("dayStrip");
+    const sel = strip.querySelector(".day-pill.active");
+    if (sel) strip.scrollLeft = Math.max(0, sel.offsetLeft - strip.offsetLeft - (strip.clientWidth - sel.offsetWidth) / 2);
+  }
+
+  function nudge(step) {
+    minutes = Math.min(23 * 60 + 45, Math.max(0, Math.round((minutes + step) / 15) * 15));
+    refresh();
+  }
+
+  // Updates the sheet in place (no re-render, so nothing jumps or loses focus).
+  function refresh() {
+    const inStrip = !!document.querySelector(`#dayStrip .day-pill[data-key="${dayKey}"]`);
+    document.querySelectorAll("#dayStrip .day-pill[data-key]").forEach((b) => {
+      const on = b.getAttribute("data-key") === dayKey;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", on);
+    });
+    document.getElementById("moreDatesLabel").textContent = inStrip ? "Pick a later date" : "Change date";
+    document.getElementById("moreDates").hidden = !(showMoreDates || !inStrip);
+    document.getElementById("planDateInput").value = dayKey;
+
+    document.getElementById("tpTime").textContent = timeLabel(minutes);
+    document.getElementById("tpNative").value = hhmm(minutes);
+    document.querySelectorAll("#timePresets .preset").forEach((b) => b.classList.toggle("active", parseInt(b.getAttribute("data-mins"), 10) === minutes));
+
+    const title = document.getElementById("planTitleInput").value.trim();
+    document.querySelectorAll("#titleChips .pick-chip").forEach((b) => b.classList.toggle("active", b.getAttribute("data-title") === title));
+
+    const past = chosenDate().getTime() <= Date.now();
+    const summary = document.getElementById("planSummary");
+    summary.classList.toggle("warn", past);
+    summary.innerHTML = past
+      ? "That time has already passed — pick a later time or day."
+      : `<strong>${escapeHtml(title || "Gym session")}</strong> · ${dayName(dayKey)} at ${timeLabel(minutes)}`;
+    document.getElementById("savePlanBtn").disabled = past;
   }
 
   async function save() {
     const title = document.getElementById("planTitleInput").value.trim() || "Gym session";
-    const dateVal = document.getElementById("planDateInput").value;
-    if (!dateVal) { toast("Pick a date"); return; }
-    const dt = new Date(dateVal + "T00:00:00");
-    dt.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    const dt = chosenDate();
+    if (dt.getTime() <= Date.now()) { toast("Pick a time in the future"); return; }
     const templateName = document.getElementById("planTplSelect").value || null;
     const btn = document.getElementById("savePlanBtn");
     btn.disabled = true; btn.textContent = "Proposing…";
     try {
       await ctx.db.createGymPlan(ctx.user.id, title, dt.toISOString(), templateName);
       closeSheet();
-      toast("Session proposed");
+      toast("Session proposed — your friends will be notified");
       onDone();
     } catch (err) {
       toast("Couldn't propose that: " + (err.message || String(err)));
-      btn.disabled = false; btn.textContent = "Propose";
+      btn.disabled = false; btn.textContent = "Propose to friends";
     }
   }
 

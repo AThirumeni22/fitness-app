@@ -142,7 +142,24 @@ export async function renderFriends(ctx) {
       catch (e) { toast("Couldn't accept that request"); }
     }));
     el.querySelectorAll(".decline-btn, .cancel-btn, .remove-btn").forEach((b) => b.addEventListener("click", async () => {
-      try { await ctx.db.removeFriendship(b.getAttribute("data-id")); renderFriends(ctx); }
+      const id = b.getAttribute("data-id");
+      if (b.classList.contains("remove-btn")) {
+        const r = data.accepted.find((x) => x.id === id);
+        const name = (r && r.otherProfile.display_name) || "this friend";
+        const ok = await ctx.confirm({
+          title: `Remove ${name}?`,
+          message: "You'll stop seeing each other's workouts, calendar days and sessions. To be friends again, one of you will have to send a new request.",
+          confirmText: "Remove friend",
+          cancelText: "Keep friend",
+          danger: true
+        });
+        if (!ok) return;
+      }
+      try {
+        await ctx.db.removeFriendship(id);
+        if (b.classList.contains("remove-btn")) toast("Friend removed");
+        renderFriends(ctx);
+      }
       catch (e) { toast("Couldn't update that"); }
     }));
   }

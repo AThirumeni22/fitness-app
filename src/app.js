@@ -232,8 +232,40 @@ export async function mountApp(root, user) {
 
       <div class="sheet" id="sheet" hidden><div class="sheet-inner" id="sheetInner"></div></div>
       <div class="toast" id="toast" hidden></div>
+      <div class="dialog" id="dialog" hidden></div>
     </div>
   `;
+
+  // "Are you sure?" pop-up for things that are hard to undo. Resolves true
+  // only when the confirm button is pressed (backdrop/Cancel/Escape → false).
+  function confirmDialog({ title, message = "", confirmText = "Confirm", cancelText = "Cancel", danger = false }) {
+    const dlg = document.getElementById("dialog");
+    return new Promise((resolve) => {
+      dlg.innerHTML = `
+        <div class="dialog-card" role="alertdialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogMsg">
+          <h3 id="dialogTitle">${escapeHtml(title)}</h3>
+          ${message ? `<p class="muted" id="dialogMsg">${escapeHtml(message)}</p>` : ""}
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" id="dialogCancel">${escapeHtml(cancelText)}</button>
+            <button class="btn ${danger ? "btn-danger" : "btn-primary"}" id="dialogOk">${escapeHtml(confirmText)}</button>
+          </div>
+        </div>`;
+      dlg.hidden = false;
+      const done = (val) => {
+        dlg.hidden = true;
+        dlg.innerHTML = "";
+        document.removeEventListener("keydown", onKey);
+        resolve(val);
+      };
+      const onKey = (e) => { if (e.key === "Escape") done(false); };
+      document.addEventListener("keydown", onKey);
+      dlg.onclick = (e) => { if (e.target === dlg) done(false); };
+      document.getElementById("dialogCancel").addEventListener("click", () => done(false));
+      document.getElementById("dialogOk").addEventListener("click", () => done(true));
+      // Focus the safe choice so an accidental Enter doesn't confirm.
+      document.getElementById("dialogCancel").focus();
+    });
+  }
 
   document.getElementById("sheet").addEventListener("click", (e) => {
     if (e.target.id === "sheet") closeSheet();
@@ -314,13 +346,17 @@ export async function mountApp(root, user) {
   // sheet's own content starts scrolling.
   function bindSheetDrag() {
     const inner = document.getElementById("sheetInner");
-    let startY = 0, lastY = 0, lastT = 0, vel = 0, dy = 0, dragging = false, armed = false;
+    let startX = 0, startY = 0, lastY = 0, lastT = 0, vel = 0, dy = 0, dragging = false, armed = false;
     inner.addEventListener("touchstart", (e) => {
       if (e.touches.length !== 1) return;
       const t = e.target;
+      // Sideways controls (sliders, scrolling chip rows) own their gesture —
+      // a little downward drift while using them mustn't drag the sheet.
+      if (t.closest && t.closest("[data-nodrag], input[type=range]")) { armed = false; return; }
       const onGrip = !!(t.closest && t.closest(".sheet-handle, .sheet-title")) && !(t.closest && t.closest("button, input, select, textarea"));
       armed = onGrip || inner.scrollTop <= 0;
       if (!armed) return;
+      startX = e.touches[0].clientX;
       startY = lastY = e.touches[0].clientY; lastT = performance.now();
       dy = 0; vel = 0; dragging = false;
       inner._onGrip = onGrip;
@@ -330,6 +366,10 @@ export async function mountApp(root, user) {
       const y = e.touches[0].clientY;
       const move = y - startY;
       if (!dragging) {
+        // Wait for a clear direction; mostly sideways → not a pull-down.
+        const dx = Math.abs(e.touches[0].clientX - startX);
+        if (dx < 7 && Math.abs(move) < 7) return;
+        if (dx > Math.abs(move)) { armed = false; return; }
         if (move > 6 && (inner._onGrip || inner.scrollTop <= 0)) {
           dragging = true;
           inner.classList.add("dragging");
@@ -1554,6 +1594,7 @@ export async function mountApp(root, user) {
     isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates,
     openPrivacy: () => openPrivacySheet({ openSheet, closeSheet }),
     openProfile: () => openProfileSheet(ctx),
+    confirm: confirmDialog,
     push: { pushSupport, isPushEnabled, enablePush, disablePush },
     onPushChanged
   };

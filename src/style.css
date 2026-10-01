@@ -638,9 +638,6 @@ details.cat-group[open] summary{border-bottom:1px solid var(--border);}
 .plan-reply-btn.on-out{background:rgba(251,113,133,.14); border-color:rgba(251,113,133,.5); color:var(--crit);}
 .plan-reply-btn:disabled{opacity:.6;}
 
-input[type="range"].time-slider{-webkit-appearance:none; appearance:none; width:100%; height:6px; border-radius:99px; background:var(--surface-hi); outline:none; margin:var(--s3) 0; cursor:pointer; touch-action:pan-x;}
-input[type="range"].time-slider::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:28px; height:28px; border-radius:50%; background:var(--accent); border:3px solid #fff; box-shadow:0 2px 8px rgba(0,0,0,.45); cursor:pointer;}
-input[type="range"].time-slider::-moz-range-thumb{width:28px; height:28px; border-radius:50%; background:var(--accent); border:3px solid #fff; cursor:pointer;}
 
 /* day sheet workout cards */
 .dw-stack{display:flex; flex-direction:column; gap:var(--s2);}
@@ -849,3 +846,96 @@ input[type="range"].time-slider::-moz-range-thumb{width:28px; height:28px; borde
 .notice-head h4{font-size:16px;}
 .notice-card .row .btn{flex:1;}
 .sheet code, .notice-card code{background:var(--surface-hi); padding:1px 5px; border-radius:4px; font-family:var(--font-mono); font-size:12.5px;}
+
+/* ---------- propose a time ---------- */
+.chip-wrap{display:flex; flex-wrap:wrap; gap:var(--s2);}
+.pick-chip{
+  min-height:36px; padding:0 var(--s3); border-radius:999px; cursor:pointer;
+  background:var(--surface-2); border:1px solid var(--border); color:var(--ink-dim);
+  font:inherit; font-size:13px; font-weight:500; touch-action:manipulation;
+}
+.pick-chip.active{background:var(--accent-soft); border-color:rgba(129,140,248,.6); color:var(--ink);}
+.pick-chip:active{transform:scale(.96);}
+
+/* scrolls sideways edge to edge; data-nodrag keeps the sheet from moving */
+.day-strip{
+  display:flex; gap:var(--s2); overflow-x:auto; overflow-y:hidden;
+  margin:0 calc(var(--s5) * -1); padding:2px var(--s5) 6px;
+  scroll-snap-type:x proximity; scroll-padding:0 var(--s5);
+  -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; touch-action:pan-x;
+  scrollbar-width:none;
+}
+.day-strip::-webkit-scrollbar{display:none;}
+.day-pill{
+  flex:0 0 62px; scroll-snap-align:start;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  min-height:78px; border-radius:var(--r-m); cursor:pointer; touch-action:manipulation;
+  background:var(--surface-2); border:1px solid var(--border); color:var(--ink); font:inherit;
+}
+.day-pill:active{transform:scale(.95);}
+.dp-top{font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint);}
+.dp-num{font-family:var(--font-display); font-size:22px; font-weight:600; line-height:1;}
+.dp-mon{font-size:11px; color:var(--ink-dim);}
+.day-pill.active{background:var(--grad); border-color:transparent; box-shadow:var(--glow);}
+.day-pill.active .dp-top, .day-pill.active .dp-mon{color:rgba(255,255,255,.85);}
+.more-dates-btn{align-self:flex-start; display:inline-flex; align-items:center; gap:var(--s2); margin:calc(var(--s2) * -1) 0; padding-left:0;}
+.more-dates-btn svg{width:16px; height:16px;}
+
+/* iOS Safari gives date inputs a fixed minimum width that ignores width:100%
+   and pushes them off-screen; dropping the native appearance fixes it. */
+.field input.date-native{-webkit-appearance:none; appearance:none; display:block; width:100%; max-width:100%; min-width:0; line-height:46px;}
+.date-native::-webkit-date-and-time-value{text-align:left;}
+
+.time-picker{display:grid; grid-template-columns:60px minmax(0,1fr) 60px; gap:var(--s2);}
+.tp-step{
+  min-height:68px; border-radius:var(--r-m); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--surface-2); border:1px solid var(--border); color:var(--ink);
+  touch-action:manipulation; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+}
+.tp-step svg{width:22px; height:22px;}
+.tp-step:active{transform:scale(.93); background:var(--surface-hi);}
+.field .tp-display{
+  position:relative; overflow:hidden; cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  min-height:68px; border-radius:var(--r-m); background:var(--surface-2); border:1px solid rgba(129,140,248,.45);
+  text-transform:none; letter-spacing:0; font-size:inherit; font-weight:inherit; color:var(--ink);
+}
+.tp-time{font-family:var(--font-display); font-size:30px; font-weight:600; line-height:1; letter-spacing:.02em;}
+.tp-hint{font-size:11px; color:var(--ink-faint);}
+/* the phone's own time wheel, invisible on top of the big time */
+.field .tp-display input{
+  position:absolute; inset:0; width:100%; height:100%; min-height:0;
+  opacity:0; margin:0; padding:0; border:0; font-size:16px; cursor:pointer;
+  -webkit-appearance:none; appearance:none;
+}
+.preset-grid{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:var(--s2);}
+.pick-chip.preset{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+  min-height:52px; padding:var(--s1); border-radius:var(--r-m); font-size:12px; white-space:nowrap;
+}
+.pick-chip.preset .faint{font-size:11px;}
+@media (max-width:360px){ .preset-grid{grid-template-columns:repeat(2, minmax(0,1fr));} }
+
+.plan-summary{
+  font-size:14px; color:var(--ink-dim); text-align:center; overflow-wrap:anywhere;
+  padding:var(--s3); border-radius:var(--r-m); background:var(--surface-2); border:1px solid var(--border);
+}
+.plan-summary strong{color:var(--ink);}
+.plan-summary.warn{color:var(--amber); border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08);}
+
+/* ---------- confirm dialog ---------- */
+.dialog{
+  position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+  padding:var(--gutter); background:rgba(3,4,6,.72); animation:fadeIn .18s var(--ease) both;
+}
+.dialog-card{
+  width:100%; max-width:360px; display:flex; flex-direction:column; gap:var(--s3);
+  padding:var(--s5); border-radius:var(--r-l); background:var(--surface); border:1px solid var(--border-strong);
+  box-shadow:var(--shadow-lg); animation:fadeRise .22s var(--ease) both;
+}
+.dialog-card h3{font-size:18px; overflow-wrap:anywhere;}
+.dialog-card p{font-size:14px; line-height:1.5;}
+.dialog-actions{display:grid; grid-template-columns:1fr 1fr; gap:var(--s2); margin-top:var(--s1);}
+.dialog-actions .btn{padding:0 var(--s3);}
+.dialog .btn-danger{background:var(--crit); border-color:transparent; color:#fff;}
