@@ -1,4 +1,4 @@
--- Trainlog database schema
+-- Obonto database schema
 --
 -- Run this once in your Supabase project's SQL editor
 -- (Dashboard -> SQL Editor -> New query -> paste -> Run).

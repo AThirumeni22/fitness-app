@@ -812,3 +812,8 @@ input[type="range"].time-slider::-moz-range-thumb{width:28px; height:28px; borde
 .tabbar button{transition:flex-grow var(--dur-slow) var(--ease), transform var(--dur-fast) var(--ease), color var(--dur) var(--ease), background-color var(--dur) var(--ease);}
 .tabbar button.active{flex-grow:2.2;}
 .seg-toggle button, .metric-toggle button{white-space:nowrap;}
+
+/* label row with an inline action (e.g. "Forgot password?") */
+.field-top{display:flex; align-items:center; justify-content:space-between; gap:var(--s2); min-height:24px;}
+.link-btn.link-sm{min-height:44px; margin:-10px 0; padding:0; font-size:13px;}
+.auth-card .onb-head{text-align:left;}

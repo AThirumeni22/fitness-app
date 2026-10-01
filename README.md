@@ -34,6 +34,11 @@ no server to run yourself.
    This adds one more column that stores which templates someone's pinned
    and which built-in templates they've hidden — run it once, after
    migration_3_plan_template.sql.
+2e. Run a fifth query with the contents of
+   [`supabase/migration_5_onboarding_sharing.sql`](./supabase/migration_5_onboarding_sharing.sql).
+   This stores each person's privacy-notice consent and adds the
+   `template_shares` table used to send templates to friends — run it once,
+   after migration_4_template_prefs.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -41,6 +46,14 @@ no server to run yourself.
    people can sign up and start using the app immediately instead of
    waiting on a confirmation email. (Leave it on if you'd rather have that
    extra verification step.)
+
+5. For **Forgot password** to work, open **Authentication -> URL
+   Configuration** and add your app's addresses under **Redirect URLs**:
+   `http://localhost:5173/**` for local development and
+   `https://your-project.vercel.app/**` once deployed (also set **Site URL**
+   to the deployed address). The reset email links back to the app, which
+   then asks for a new password. You can reword that email under
+   **Authentication -> Email Templates -> Reset Password**.
 
 ## 2. Run it locally
 
@@ -148,6 +161,24 @@ their workout history with just a name, not a category, since categories
 for custom exercises aren't shared across accounts — everything from the
 875+ built-in library works normally either way.
 
+## Onboarding and privacy
+
+- **Welcome flow** — the first time someone signs in they pick the name
+  friends will see, then read the privacy notice and tick two boxes
+  (data processing, and that photos/videos are shared with friends) before
+  the app opens. Existing users see the notice once too. The notice text
+  lives in `src/onboarding.js`: fill in `APP_OWNER` and `CONTACT_EMAIL`
+  there, and bump `PRIVACY_VERSION` when you change the notice so everyone
+  is asked to accept the new version. It's also readable any time from
+  Profile → Privacy.
+- **Share a template** — the share icon on any template (Exercises tab)
+  sends a snapshot of it, including sets, reps, weights and rest, to the
+  friends you pick. They see it under "Shared with you" (with a dot on the
+  Exercises tab), tap "Add & customise" to get their own copy and adjust
+  the numbers, and nothing they change affects yours. Weights are converted
+  between kg and lb, and any of your custom exercises in it are recreated in
+  their library.
+
 ## Exercise library
 
 The built-in library (`public/exercises-data.json`) is adapted from the
@@ -165,7 +196,9 @@ index.html            Entry HTML
 src/
   main.js             Boots the app: shows the auth screen or the app
   auth.js             Sign in / sign up screen
-  app.js              Main app UI (Train / History / Exercises tabs, guided player)
+  app.js              Main app UI (Train / History / Exercises tabs, guided player, template sharing)
+  onboarding.js       First-run name + privacy-notice (GDPR consent) flow
+  fx.js               Presentational interactions (ripples, tab indicator, confetti)
   friends.js          Friends tab (requests, add by email)
   calendar.js         Calendar tab (visits, day photos/videos, gym-time polls)
   profile.js          Profile sheet (name + avatar)
@@ -181,6 +214,7 @@ supabase/
   migration_2_social.sql        Friends, calendar/day-posts, gym-time polls, storage buckets
   migration_3_plan_template.sql Adds an optional template name to proposed gym sessions
   migration_4_template_prefs.sql Adds pinned/hidden template preferences per profile
+  migration_5_onboarding_sharing.sql Privacy consent columns + template_shares table
 ```
 
 ## Local development notes

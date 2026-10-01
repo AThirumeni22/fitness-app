@@ -1,4 +1,4 @@
--- SocialGym — adds an optional template name to "propose a time" plans.
+-- Obonto — adds an optional template name to "propose a time" plans.
 --
 -- Run this once in the Supabase SQL editor, after migration_2_social.sql.
 -- Additive and safe to run even if you've already got gym_plans data —

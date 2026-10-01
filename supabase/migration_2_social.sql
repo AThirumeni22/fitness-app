@@ -1,4 +1,4 @@
--- Trainlog — social features migration
+-- Obonto — social features migration
 --
 -- Run this once in your Supabase project's SQL editor, AFTER schema.sql has
 -- already been run (Dashboard -> SQL Editor -> New query -> paste -> Run).

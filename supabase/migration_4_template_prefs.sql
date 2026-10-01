@@ -1,4 +1,4 @@
--- SocialGym — lets each person pin favorite templates (shown as quick-start
+-- Obonto — lets each person pin favorite templates (shown as quick-start
 -- tiles on the Train tab home screen) and hide the three starter templates
 -- (Push/Pull/Leg Day) they don't want cluttering their list.
 --
