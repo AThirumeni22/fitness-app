@@ -1,4 +1,5 @@
 import "./style.css";
+import "./fx.js";
 import { supabase, configMissing, configError } from "./supabaseClient.js";
 import { renderAuthScreen } from "./auth.js";
 import { mountApp } from "./app.js";
