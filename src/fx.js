@@ -40,6 +40,7 @@ document.addEventListener("pointermove", (e) => {
   }
 }, { passive: true });
 document.addEventListener("pointerout", (e) => {
+  if (!finePointer.matches) return;
   const el = e.target.closest && e.target.closest(".home-tile");
   if (el && !el.contains(e.relatedTarget)) { el.style.setProperty("--rx", "0deg"); el.style.setProperty("--ry", "0deg"); }
 }, { passive: true });
@@ -135,7 +136,8 @@ function confetti() {
   host.className = "fx-confetti";
   document.body.appendChild(host);
   const W = window.innerWidth, H = window.innerHeight;
-  for (let i = 0; i < 70; i++) {
+  const count = finePointer.matches ? 70 : 36; // lighter on phones
+  for (let i = 0; i < count; i++) {
     const p = document.createElement("i");
     const c = CONFETTI[i % CONFETTI.length];
     p.style.background = c;
