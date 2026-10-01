@@ -7,10 +7,12 @@ import { supabase } from "./supabaseClient.js";
 
 // ================= profile =================
 
+// select("*") rather than a fixed column list, so the app still loads if a
+// newer migration (e.g. the privacy-consent columns) hasn't been run yet.
 export async function getProfile(userId) {
   const { data, error } = await supabase
     .from("profiles")
-    .select("unit, display_name, avatar_url, template_prefs")
+    .select("*")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -18,7 +20,7 @@ export async function getProfile(userId) {
     const { data: created, error: insertErr } = await supabase
       .from("profiles")
       .insert({ id: userId, unit: "kg" })
-      .select("unit, display_name, avatar_url, template_prefs")
+      .select("*")
       .single();
     if (insertErr) throw insertErr;
     return created;
@@ -65,6 +67,15 @@ export async function uploadAvatar(userId, file) {
   if (error) throw error;
   const { data } = supabase.storage.from("avatars").getPublicUrl(path);
   return data.publicUrl;
+}
+
+// Records that this person accepted the privacy notice (GDPR consent):
+// when, and which version of the notice they saw.
+export async function acceptPrivacy(userId, version) {
+  const { error } = await supabase
+    .from("profiles")
+    .upsert({ id: userId, privacy_accepted_at: new Date().toISOString(), privacy_version: version });
+  if (error) throw error;
 }
 
 // ================= exercises / templates =================
@@ -332,5 +343,55 @@ export async function unvoteGymPlanOption(optionId, userId) {
 
 export async function deleteGymPlan(id) {
   const { error } = await supabase.from("gym_plans").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ================= template sharing =================
+// A share is a snapshot of the template at the moment it was sent (so the
+// sender editing theirs later doesn't change what a friend received). RLS
+// only lets you send to accepted friends — see migration_5_onboarding_sharing.sql.
+
+export async function shareTemplate(senderId, recipientIds, tpl) {
+  if (!recipientIds.length) return;
+  const rows = recipientIds.map((rid) => ({
+    sender_id: senderId,
+    recipient_id: rid,
+    name: tpl.name,
+    exercise_ids: tpl.exerciseIds,
+    targets: tpl.targets || {},
+    exercise_meta: tpl.exerciseMeta || {},
+    unit: tpl.unit || "kg"
+  }));
+  const { error } = await supabase.from("template_shares").insert(rows);
+  if (error) throw error;
+}
+
+export async function listIncomingShares(userId) {
+  const { data, error } = await supabase
+    .from("template_shares")
+    .select("id, sender_id, name, exercise_ids, targets, exercise_meta, unit, created_at")
+    .eq("recipient_id", userId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const rows = data || [];
+  const profiles = await getProfilesPublic([...new Set(rows.map((r) => r.sender_id))]);
+  const nameById = {};
+  profiles.forEach((p) => { nameById[p.id] = p.display_name; });
+  return rows.map((r) => ({
+    id: r.id,
+    senderId: r.sender_id,
+    senderName: nameById[r.sender_id] || "A friend",
+    name: r.name,
+    exerciseIds: r.exercise_ids || [],
+    targets: r.targets || {},
+    exerciseMeta: r.exercise_meta || {},
+    unit: r.unit === "lb" ? "lb" : "kg",
+    createdAt: r.created_at
+  }));
+}
+
+export async function respondToShare(id, status) {
+  const { error } = await supabase.from("template_shares").update({ status }).eq("id", id);
   if (error) throw error;
 }
