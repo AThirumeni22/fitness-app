@@ -40,6 +40,7 @@ export function privacyNoticeHtml() {
         <li>Your training: workouts, sets, reps, weights, templates, custom exercises and gym-time plans.</li>
         <li>Photos and videos you choose to post on a calendar day.</li>
         <li>Your friend connections and templates you share or receive.</li>
+        <li>Your notifications (friend requests, sessions, replies) and your time zone, so times show correctly. If you turn on push notifications, the delivery address your browser or phone gives us for that device; turning them off deletes it.</li>
       </ul>
 
       <h4>Why, and on what basis</h4>

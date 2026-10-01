@@ -120,24 +120,36 @@ export async function renderCalendar(ctx) {
     if (!upcoming.length) return `<div class="card"><p class="muted">No upcoming sessions proposed.</p></div>${newBtnHtml}`;
     const cardsHtml = upcoming.map((p) => {
       const opt = p.options[0];
-      const mine = opt.voterIds.includes(ctx.user.id);
-      const names = opt.voterIds.map((id) => nameById[id] || "Someone");
-      return `<div class="plan-card${mine ? " joined" : ""}">
+      const isCreator = p.creatorId === ctx.user.id;
+      // "in" / "out" / null (not answered yet)
+      const reply = opt.voterIds.includes(ctx.user.id) ? "in" : opt.declinedIds.includes(ctx.user.id) ? "out" : null;
+      const inNames = opt.voterIds.map((id) => nameById[id] || "Someone");
+      const outNames = opt.declinedIds.map((id) => nameById[id] || "Someone");
+      const host = isCreator ? "Your session" : `Proposed by ${nameById[p.creatorId] || "a friend"}`;
+      const replyBtns = isCreator ? "" : `
+        <div class="plan-reply" role="group" aria-label="Can you make it?">
+          <button class="btn btn-sm plan-reply-btn${reply === "in" ? " on-in" : ""}" data-plan="${p.id}" data-opt="${opt.id}" data-reply="in" data-current="${reply || ""}" aria-pressed="${reply === "in"}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>I'm in
+          </button>
+          <button class="btn btn-sm plan-reply-btn${reply === "out" ? " on-out" : ""}" data-plan="${p.id}" data-opt="${opt.id}" data-reply="out" data-current="${reply || ""}" aria-pressed="${reply === "out"}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 6l12 12M18 6L6 18"/></svg>Can't make it
+          </button>
+        </div>`;
+      return `<div class="plan-card${reply === "in" ? " joined" : ""}">
         <div class="plan-card-head">
           <div>
             <h4>${ctx.escapeHtml(p.title)}</h4>
             <div class="plan-when">${fmtWhen(opt.startsAt)}</div>
+            <span class="faint">${ctx.escapeHtml(host)}</span>
             ${p.templateName ? `<span class="plan-tpl-badge">${ctx.escapeHtml(p.templateName)}</span>` : ""}
           </div>
-          ${p.creatorId === ctx.user.id ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Delete" aria-label="Delete plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
+          ${isCreator ? `<button class="icon-btn del-plan" data-id="${p.id}" title="Cancel session" aria-label="Cancel session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` : ""}
         </div>
-        ${mine ? `
-          <div class="plan-joined-row">
-            <span class="plan-in-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg>You're in</span>
-            <button class="btn btn-secondary btn-sm join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="1">Back out</button>
-          </div>` : `
-          <button class="btn btn-primary btn-block join-plan" data-plan="${p.id}" data-opt="${opt.id}" data-mine="0">I'm in</button>`}
-        <p class="plan-who muted">${names.length ? ctx.escapeHtml(names.join(", ")) : "No one yet"}</p>
+        ${replyBtns}
+        <div class="plan-who">
+          <p><span class="plan-who-label in">In</span>${inNames.length ? ctx.escapeHtml(inNames.join(", ")) : '<span class="muted">No one yet</span>'}</p>
+          ${outNames.length ? `<p><span class="plan-who-label out">Can't</span>${ctx.escapeHtml(outNames.join(", "))}</p>` : ""}
+        </div>
       </div>`;
     }).join("");
     return `<div class="plan-list">${cardsHtml}</div>` + newBtnHtml;
@@ -146,19 +158,29 @@ export async function renderCalendar(ctx) {
   function bindPlans() {
     const newBtn = document.getElementById("newPlanBtn");
     if (newBtn) newBtn.addEventListener("click", () => openNewPlanSheet(ctx, () => renderCalendar(ctx)));
-    el.querySelectorAll(".join-plan").forEach((b) => b.addEventListener("click", async () => {
+    // Tapping your current answer again clears it ("back out").
+    el.querySelectorAll(".plan-reply-btn").forEach((b) => b.addEventListener("click", async () => {
       const planId = b.getAttribute("data-plan"), optId = b.getAttribute("data-opt");
-      const mine = b.getAttribute("data-mine") === "1";
+      const want = b.getAttribute("data-reply"), current = b.getAttribute("data-current") || null;
+      b.closest(".plan-reply").querySelectorAll("button").forEach((x) => { x.disabled = true; });
       try {
-        if (mine) await ctx.db.unvoteGymPlanOption(optId, ctx.user.id);
-        else await ctx.db.voteGymPlanOption(planId, optId, ctx.user.id);
-        ctx.toast(mine ? "You've backed out" : "You're in");
+        if (current === want) {
+          await ctx.db.clearGymPlanReply(optId, ctx.user.id);
+          ctx.toast(want === "in" ? "You've backed out" : "Reply cleared");
+        } else {
+          await ctx.db.setGymPlanReply(planId, optId, ctx.user.id, want === "in", !!current);
+          ctx.toast(want === "in" ? "You're in" : "Got it — you can't make it");
+        }
         renderCalendar(ctx);
-      } catch (err) { ctx.toast("Couldn't update your vote"); }
+      } catch (err) {
+        ctx.toast(err.message && /migration_6/.test(err.message) ? err.message : "Couldn't update your reply");
+        renderCalendar(ctx);
+      }
     }));
     el.querySelectorAll(".del-plan").forEach((b) => b.addEventListener("click", async () => {
-      try { await ctx.db.deleteGymPlan(b.getAttribute("data-id")); renderCalendar(ctx); }
-      catch (err) { ctx.toast("Couldn't delete that"); }
+      if (!confirm("Cancel this session? Everyone who's in will be notified.")) return;
+      try { await ctx.db.deleteGymPlan(b.getAttribute("data-id")); ctx.toast("Session cancelled"); renderCalendar(ctx); }
+      catch (err) { ctx.toast("Couldn't cancel that"); }
     }));
   }
 }

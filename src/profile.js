@@ -40,6 +40,50 @@ export function openProfileSheet(ctx) {
   const { openSheet, closeSheet, toast, escapeHtml, state, user } = ctx;
   let pendingFile = null;
   let previewUrl = state.profile.avatarUrl || "";
+  let pushOn = !!state.pushEnabled;
+  let pushBusy = false;
+
+  // Push notifications on *this* device (each phone/browser is turned on separately).
+  function notifSectionHtml() {
+    const support = ctx.push.pushSupport();
+    if (support === "ios-install-needed") {
+      return `<p class="muted">On iPhone, notifications only work from the installed app: tap Share → <strong>Add to Home Screen</strong>, open Obonto from your home screen, then turn them on here.</p>`;
+    }
+    if (support === "denied") {
+      return `<p class="muted">Notifications are blocked for Obonto. Allow them in your browser or phone settings, then come back here.</p>`;
+    }
+    if (support === "unsupported") {
+      return `<p class="muted">This browser can't show notifications. You'll still see everything under the bell at the top.</p>`;
+    }
+    if (support === "not-configured") {
+      return `<p class="muted">Push notifications aren't set up for this site yet (missing <code>VITE_VAPID_PUBLIC_KEY</code>). You'll still see everything under the bell at the top.</p>`;
+    }
+    return `
+      <div class="field">
+        <label>On this device</label>
+        <div class="seg-toggle" id="pushToggle">
+          <button type="button" data-on="1" class="${pushOn ? "active" : ""}"${pushBusy ? " disabled" : ""}>On</button>
+          <button type="button" data-on="0" class="${pushOn ? "" : "active"}"${pushBusy ? " disabled" : ""}>Off</button>
+        </div>
+      </div>
+      <p class="muted">Friend requests, sessions friends propose, who's in or can't make it, cancellations, and a reminder an hour before.</p>`;
+  }
+
+  async function setPush(on) {
+    if (on === pushOn || pushBusy) return;
+    pushBusy = true; draw();
+    try {
+      if (on) { await ctx.push.enablePush(); toast("Notifications on"); }
+      else { await ctx.push.disablePush(); toast("Notifications off on this device"); }
+      pushOn = on;
+      ctx.onPushChanged(on);
+    } catch (err) {
+      toast(err.message === "denied" ? "Notifications are blocked — allow them in your browser settings"
+        : err.message === "dismissed" ? "Notifications not turned on"
+          : "Couldn't change notifications: " + (err.message || String(err)));
+    }
+    pushBusy = false; draw();
+  }
 
   function draw() {
     const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
@@ -76,6 +120,9 @@ export function openProfileSheet(ctx) {
         </div>
       ` : ""}
 
+      <div class="section-label">Notifications</div>
+      ${notifSectionHtml()}
+
       <div class="section-label">Privacy</div>
       <button type="button" class="btn btn-secondary btn-block" id="privacyBtn">Read the privacy notice</button>
       <p class="faint" style="overflow-wrap:anywhere;">Signed in as ${escapeHtml(user.email || "")}</p>
@@ -102,6 +149,7 @@ export function openProfileSheet(ctx) {
     document.getElementById("privacyBtn").addEventListener("click", () => ctx.openPrivacy());
     const restoreBtn = document.getElementById("restoreTplBtn");
     if (restoreBtn) restoreBtn.addEventListener("click", () => { ctx.restoreBuiltinTemplates(); draw(); });
+    document.querySelectorAll("#pushToggle button").forEach((b) => b.addEventListener("click", () => setPush(b.getAttribute("data-on") === "1")));
     document.querySelectorAll("#unitToggle button").forEach((b) => b.addEventListener("click", () => {
       ctx.setUnit(b.getAttribute("data-u"));
       draw();
@@ -150,4 +198,9 @@ export function openProfileSheet(ctx) {
   }
 
   draw();
+  ctx.push.isPushEnabled().then((on) => {
+    if (on === pushOn || !document.getElementById("pushToggle")) return;
+    pushOn = on;
+    document.querySelectorAll("#pushToggle button").forEach((b) => b.classList.toggle("active", (b.getAttribute("data-on") === "1") === on));
+  });
 }

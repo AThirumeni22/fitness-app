@@ -39,6 +39,13 @@ no server to run yourself.
    This stores each person's privacy-notice consent and adds the
    `template_shares` table used to send templates to friends — run it once,
    after migration_4_template_prefs.sql.
+2f. Run a sixth query with the contents of
+   [`supabase/migration_6_notifications.sql`](./supabase/migration_6_notifications.sql).
+   This adds notifications (friend requests, proposed sessions, replies,
+   cancellations, reminders), the "Can't make it" reply, and a 5-minute
+   reminder job. If it stops with an error about `pg_cron`, enable
+   **pg_cron** under **Database -> Extensions** and run it again. Then
+   finish the notification setup in [Notifications](#4-notifications).
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -77,6 +84,7 @@ The frontend is a static site, so any static host works. The easiest path:
 3. Before deploying, open **Environment Variables** and add:
    - `VITE_SUPABASE_URL` — your Supabase project URL
    - `VITE_SUPABASE_ANON_KEY` — your Supabase anon public key
+   - `VITE_VAPID_PUBLIC_KEY` — the public push key (see [Notifications](#4-notifications))
 4. Click **Deploy**. Vercel builds and gives you a live URL
    (`your-project.vercel.app`) — send that to your friends. Every push to
    the main branch redeploys automatically.
@@ -84,6 +92,62 @@ The frontend is a static site, so any static host works. The easiest path:
 The anon key is safe to expose in a public frontend — it can't do anything
 beyond what the Row Level Security policies in `supabase/schema.sql` allow,
 which is: read and write your own rows, never anyone else's.
+
+## 4. Notifications
+
+Friends get a notification (on their phone or computer, and under the bell
+in the app's top bar) when:
+
+- someone sends them a friend request, or accepts theirs;
+- a friend proposes a session in the Calendar (so they can tap "I'm in" or
+  "Can't make it");
+- someone replies to a session they proposed or are going to, or backs out;
+- a session they were going to is cancelled;
+- a session they're in starts in about an hour.
+
+All of this is free. Who gets told what is decided by database triggers in
+`migration_6_notifications.sql`; the `send-push` Edge Function just delivers
+them. One-time setup:
+
+1. **Make a push key pair** (once, on your computer):
+   `npx web-push generate-vapid-keys`. It prints a public key and a
+   private key. The public one is fine to share; keep the private one secret.
+2. **Deploy the Edge Function.** Either:
+   - in the Supabase dashboard: **Edge Functions -> Deploy a new function ->
+     Via Editor**, name it `send-push`, paste in
+     [`supabase/functions/send-push/index.ts`](./supabase/functions/send-push/index.ts),
+     and click **Deploy**; or
+   - from this folder: `npx supabase login`, then
+     `npx supabase functions deploy send-push --project-ref <your-project-ref>`.
+3. **Add its secrets:** **Edge Functions -> Secrets**, add
+   `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` (a
+   `mailto:you@example.com` address push services can contact).
+4. **Connect it to the table:** **Database -> Webhooks -> Create a new hook**:
+   table `notifications`, event **Insert**, type **Supabase Edge
+   Functions**, function `send-push`, and keep the default `Authorization`
+   header that's added for you. Save.
+5. **Give the app the public key:** add `VITE_VAPID_PUBLIC_KEY` to your
+   `.env` and to Vercel's Environment Variables, then redeploy.
+
+Each person then turns notifications on per device: the "Don't miss a
+session" card on the Train tab, or **Profile -> Notifications**.
+
+### Installing on your phone
+
+Obonto is an installable web app (a PWA), so there's no app store and no
+cost.
+
+- **iPhone/iPad (iOS 16.4+):** open the site in Safari, tap **Share -> Add
+  to Home Screen**, then open Obonto from the new icon. Notifications only
+  work in the installed app on iPhone, not in a Safari tab.
+- **Android:** open the site in Chrome and tap **Install app** (or menu ->
+  **Add to Home screen**).
+- **Computer:** Chrome/Edge show an install icon in the address bar.
+  Notifications also work in a normal browser tab.
+
+If notifications don't arrive: check **Profile -> Notifications** says On,
+check the phone's notification settings for Obonto, and look at
+**Edge Functions -> send-push -> Logs** in Supabase.
 
 ## How data is scoped per person
 
@@ -132,8 +196,11 @@ which is: read and write your own rows, never anyone else's.
 - **Plan a session** — at the bottom of the Calendar tab, "Propose a time"
   is a single simple form: a title, a date, a time picked with a slider,
   and (optionally) one of your own templates so friends know the workout
-  in advance. Friends tap "I'm in" (and "Back out" if plans change);
-  proposals disappear on their own once their time has passed.
+  in advance. Friends answer "I'm in" or "Can't make it" (tap your answer
+  again to clear it), and the card lists who's in and who can't. Everyone
+  is notified as replies come in (see [Notifications](#4-notifications)).
+  The proposer can cancel with the ×. Proposals disappear on their own
+  once their time has passed.
 - **Day view** — tapping a calendar day shows each person's workout as a
   card (time, sets, volume, exercises) and that day's photos/videos; tap
   any photo to view it full screen in the app, swipe between them.
@@ -198,6 +265,8 @@ src/
   auth.js             Sign in / sign up screen
   app.js              Main app UI (Train / History / Exercises tabs, guided player, template sharing)
   onboarding.js       First-run name + privacy-notice (GDPR consent) flow
+  notifications.js    Top-bar bell + notification list
+  push.js             Turning push notifications on/off on this device
   fx.js               Presentational interactions (ripples, tab indicator, confetti)
   friends.js          Friends tab (requests, add by email)
   calendar.js         Calendar tab (visits, day photos/videos, gym-time polls)
@@ -215,6 +284,8 @@ supabase/
   migration_3_plan_template.sql Adds an optional template name to proposed gym sessions
   migration_4_template_prefs.sql Adds pinned/hidden template preferences per profile
   migration_5_onboarding_sharing.sql Privacy consent columns + template_shares table
+  migration_6_notifications.sql Notifications, push subscriptions, "can't make it", reminders
+  functions/send-push/index.ts  Edge Function that delivers push notifications
 ```
 
 ## Local development notes

@@ -12,6 +12,8 @@ import { openProfileSheet } from "./profile.js";
 import { openTemplateEditor } from "./player.js";
 import { muscleChartHtml } from "./musclechart.js";
 import { needsOnboarding, runOnboarding, openPrivacySheet } from "./onboarding.js";
+import { mountNotifications, tabFromUrl } from "./notifications.js";
+import { pushSupport, isPushEnabled, enablePush, disablePush, syncPushSubscription } from "./push.js";
 
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
@@ -62,12 +64,26 @@ export async function mountApp(root, user) {
     profile: { displayName: profile.display_name || "", avatarUrl: profile.avatar_url || "" },
     templatePrefs: Object.assign({ pinned: [], hiddenBuiltin: [] }, profile.template_prefs || {}),
     friends: null,
-    shares: []
+    shares: [],
+    pushEnabled: true // assume on until checked, so the "turn on" card doesn't flash
   };
 
   function saveRestDuration(sec) {
     state.restDuration = sec;
     try { localStorage.setItem(REST_KEY, String(sec)); } catch (e) {}
+  }
+
+  // One-time "turn on notifications" card on the home screen.
+  const PUSH_CARD_KEY = `obonto.pushCardDismissed.${user.id}`;
+  function pushCardDismissed() {
+    try { return localStorage.getItem(PUSH_CARD_KEY) === "1"; } catch (e) { return false; }
+  }
+  function dismissPushCard() {
+    try { localStorage.setItem(PUSH_CARD_KEY, "1"); } catch (e) {}
+  }
+  function onPushChanged(on) {
+    state.pushEnabled = on;
+    if (currentTab === "train" && !state.active) renderTrain();
   }
 
   function isPinnedTemplate(id) { return (state.templatePrefs.pinned || []).includes(id); }
@@ -230,6 +246,9 @@ export async function mountApp(root, user) {
     try { await db.setUnit(user.id, state.unit); } catch (e) { toast("Couldn't save unit preference"); }
   }
   document.getElementById("signOutBtn").addEventListener("click", async () => {
+    // A shared/borrowed device shouldn't keep getting this person's notifications.
+    await disablePush();
+    try { supabase.removeAllChannels(); } catch (e) {}
     await supabase.auth.signOut();
   });
   document.getElementById("profileBtn").addEventListener("click", () => openProfileSheet(ctx));
@@ -724,12 +743,31 @@ export async function mountApp(root, user) {
         <p class="pin-hint">Swipe a template right to start it guided</p>
       ` : "";
 
+      const support = pushSupport();
+      const pushCardHtml = !state.pushEnabled && !pushCardDismissed() && (support === "ok" || support === "ios-install-needed") ? `
+        <div class="card notice-card">
+          <div class="notice-head">
+            <span class="notif-icon plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></span>
+            <div>
+              <h4>Don't miss a session</h4>
+              <p class="muted">${support === "ios-install-needed"
+                ? "On iPhone, tap Share → <strong>Add to Home Screen</strong>, then open Obonto from your home screen to turn on notifications."
+                : "Get notified when friends propose a time, reply, or send you a friend request."}</p>
+            </div>
+          </div>
+          <div class="row">
+            ${support === "ok" ? `<button class="btn btn-primary btn-sm" id="pushCardOn">Turn on</button>` : ""}
+            <button class="btn btn-secondary btn-sm" id="pushCardDismiss">Not now</button>
+          </div>
+        </div>` : "";
+
       el.innerHTML = `
         <div class="card start-card">
           <h2>Ready to train?</h2>
           <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
           <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
         </div>
+        ${pushCardHtml}
         <div class="section-label">Muscles hit</div>
         ${muscleChartHtml({ history: state.history, exCat, fromKg, unit: state.unit, days: mvDays })}
         ${pinnedHtml}
@@ -753,6 +791,18 @@ export async function mountApp(root, user) {
         </div>
       `;
       document.getElementById("startEmptyBtn").addEventListener("click", () => startWorkout(null));
+      const pushOn = document.getElementById("pushCardOn");
+      if (pushOn) pushOn.addEventListener("click", async () => {
+        pushOn.disabled = true;
+        try { await enablePush(); toast("Notifications on"); onPushChanged(true); }
+        catch (err) {
+          pushOn.disabled = false;
+          toast(err.message === "denied" ? "Notifications are blocked — allow them in your browser settings" : "Couldn't turn on notifications");
+          if (err.message === "denied") renderTrain();
+        }
+      });
+      const pushDismiss = document.getElementById("pushCardDismiss");
+      if (pushDismiss) pushDismiss.addEventListener("click", () => { dismissPushCard(); renderTrain(); });
       document.getElementById("homeFriendsTile").addEventListener("click", () => setTab("friends"));
       document.getElementById("homeCalendarTile").addEventListener("click", () => setTab("calendar"));
       document.getElementById("homeProfileTile").addEventListener("click", () => openProfileSheet(ctx));
@@ -1502,7 +1552,10 @@ export async function mountApp(root, user) {
     refreshTopbar,
     setUnit, saveRestDuration,
     isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates,
-    openPrivacy: () => openPrivacySheet({ openSheet, closeSheet })
+    openPrivacy: () => openPrivacySheet({ openSheet, closeSheet }),
+    openProfile: () => openProfileSheet(ctx),
+    push: { pushSupport, isPushEnabled, enablePush, disablePush },
+    onPushChanged
   };
 
   /* ---------- init ---------- */
@@ -1510,8 +1563,19 @@ export async function mountApp(root, user) {
   const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   document.getElementById("dateTag").textContent = `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
-  setTab("train");
+  // Opened from a notification (e.g. /?tab=calendar): go straight to that tab.
+  const startTab = tabFromUrl(location.href);
+  if (startTab) {
+    const u = new URL(location.href);
+    u.searchParams.delete("tab");
+    history.replaceState(null, "", u.pathname + (u.searchParams.toString() ? "?" + u.searchParams : "") + u.hash);
+  }
+  setTab(startTab || "train");
   renderRestBanner();
+  mountNotifications(ctx);
+  try { db.saveTimezone(user.id, Intl.DateTimeFormat().resolvedOptions().timeZone).catch(() => {}); } catch (e) {}
+  syncPushSubscription();
+  isPushEnabled().then((on) => { state.pushEnabled = on; if (currentTab === "train" && !state.active) renderTrain(); });
   // Check for templates friends have shared; nudge once if there are any.
   refreshShares(false).then(() => {
     if (state.shares.length) {

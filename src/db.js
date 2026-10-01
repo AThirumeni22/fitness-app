@@ -59,6 +59,13 @@ export async function updateProfile(userId, { displayName, avatarUrl } = {}) {
 // avatar.jpg: overwriting needs `upsert`, and Supabase Storage only allows
 // an upsert when the bucket also has a SELECT policy, which ours never had
 // — so the old overwrite silently failed and the photo "disappeared".
+// Lets notifications show session times in this person's own time zone.
+// Silently a no-op until migration_6 adds the column.
+export async function saveTimezone(userId, timezone) {
+  if (!timezone) return;
+  await supabase.from("profiles").update({ timezone }).eq("id", userId);
+}
+
 export async function uploadAvatar(userId, file) {
   const type = file.type || "image/jpeg";
   const ext = type.split("/")[1] === "png" ? "png" : "jpg";
@@ -310,10 +317,12 @@ export async function listGymPlans(userId, friendIds) {
   const planIds = plans.map((p) => p.id);
   const [{ data: options, error: optErr }, { data: votes, error: voteErr }] = await Promise.all([
     supabase.from("gym_plan_options").select("id, plan_id, starts_at").in("plan_id", planIds),
-    supabase.from("gym_plan_votes").select("plan_id, option_id, user_id").in("plan_id", planIds)
+    supabase.from("gym_plan_votes").select("*").in("plan_id", planIds)
   ]);
   if (optErr) throw optErr;
   if (voteErr) throw voteErr;
+  // `available` arrives with migration_6; before that every vote is "I'm in".
+  const isIn = (v) => v.available !== false;
   return plans.map((p) => ({
     id: p.id,
     creatorId: p.creator_id,
@@ -325,18 +334,30 @@ export async function listGymPlans(userId, friendIds) {
       .map((o) => ({
         id: o.id,
         startsAt: o.starts_at,
-        voterIds: (votes || []).filter((v) => v.option_id === o.id).map((v) => v.user_id)
+        voterIds: (votes || []).filter((v) => v.option_id === o.id && isIn(v)).map((v) => v.user_id),
+        declinedIds: (votes || []).filter((v) => v.option_id === o.id && !isIn(v)).map((v) => v.user_id)
       }))
       .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt))
   }));
 }
 
-export async function voteGymPlanOption(planId, optionId, userId) {
-  const { error } = await supabase.from("gym_plan_votes").insert({ plan_id: planId, option_id: optionId, user_id: userId });
-  if (error) throw error;
+// available: true = "I'm in", false = "Can't make it". Switching an existing
+// reply updates it in place (so friends get "X is in now", not "backed out").
+export async function setGymPlanReply(planId, optionId, userId, available, hadReply) {
+  const { error } = hadReply
+    ? await supabase.from("gym_plan_votes").update({ available }).eq("option_id", optionId).eq("user_id", userId)
+    : await supabase.from("gym_plan_votes").insert(
+      available
+        ? { plan_id: planId, option_id: optionId, user_id: userId }
+        : { plan_id: planId, option_id: optionId, user_id: userId, available: false }
+    );
+  if (error) {
+    if (/available/.test(error.message || "")) throw new Error("\"Can't make it\" needs migration_6 — run it in Supabase");
+    throw error;
+  }
 }
 
-export async function unvoteGymPlanOption(optionId, userId) {
+export async function clearGymPlanReply(optionId, userId) {
   const { error } = await supabase.from("gym_plan_votes").delete().eq("option_id", optionId).eq("user_id", userId);
   if (error) throw error;
 }
@@ -393,5 +414,34 @@ export async function listIncomingShares(userId) {
 
 export async function respondToShare(id, status) {
   const { error } = await supabase.from("template_shares").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+// ================= notifications =================
+// Written by database triggers (migration_6), never by the app — the app only
+// reads them and marks them read.
+
+export async function listNotifications(userId, limit = 50) {
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("id, actor_id, kind, title, body, url, created_at, read_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markNotificationsRead(userId) {
+  const { error } = await supabase
+    .from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .is("read_at", null);
+  if (error) throw error;
+}
+
+export async function clearNotifications(userId) {
+  const { error } = await supabase.from("notifications").delete().eq("user_id", userId);
   if (error) throw error;
 }

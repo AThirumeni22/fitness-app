@@ -6,6 +6,14 @@ import { mountApp } from "./app.js";
 
 const root = document.getElementById("app");
 
+// Service worker: makes Obonto installable ("Add to Home Screen") and is what
+// receives push notifications. See public/sw.js.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((err) => console.warn("Service worker not registered:", err));
+  });
+}
+
 if (configMissing) {
   root.innerHTML = `
     <div class="boot-loading err">
