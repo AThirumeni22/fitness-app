@@ -5,7 +5,6 @@
 
 import { fmtNum, fromKg, toKg, roundDisp, escapeHtml, fmtShort, fmtClock } from "./utils.js";
 import { drawChart } from "./chart.js";
-import { figureSvg } from "./figures.js";
 import { GROUP_COLORS } from "./musclechart.js";
 
 /* ================= template data ================= */
@@ -69,10 +68,19 @@ function equipLabel(ex) {
   return e.charAt(0).toUpperCase() + e.slice(1);
 }
 
-// The exercise's drawn figure (start position); a plain glyph for custom or
-// old exercises that have no drawing.
+// Exercise illustration: line-art frames from Workout Guide (Bryl Lim,
+// based on Everkinetic — CC BY-SA 4.0). Still = first frame; animated = the
+// three frames cross-fading in a loop. Custom / old exercises get a glyph.
+export const ART_CREDIT = 'Illustration: <a href="https://github.com/bryllim/workout-guide" target="_blank" rel="noopener">Workout Guide</a> by Bryl Lim, based on <a href="https://github.com/everkinetic/data" target="_blank" rel="noopener">Everkinetic</a> · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>';
+const artSrc = (ex, i) => `/exercise-art/${ex.art}/frame-${i}.svg`;
+export function exerciseArtHtml(ex, { animate = false } = {}) {
+  if (!ex || !ex.art) return `<span class="art-none">${IC.dumbbell}</span>`;
+  if (!animate) return `<img class="art-img" src="${artSrc(ex, 1)}" alt="" loading="lazy" decoding="async">`;
+  return `<div class="art-anim" role="img" aria-label="${escapeHtml(ex.name)} demonstration">${[1, 2, 3].map((i) => `<img src="${artSrc(ex, i)}" alt="" decoding="async">`).join("")}</div>`;
+}
+
 export function thumbHtml(ex) {
-  return `<span class="xc-thumb" aria-hidden="true">${ex && ex.fig ? figureSvg(ex, { pose: "auto", fit: true }) : IC.dumbbell}</span>`;
+  return `<span class="xc-thumb" aria-hidden="true">${exerciseArtHtml(ex)}</span>`;
 }
 
 // opts:

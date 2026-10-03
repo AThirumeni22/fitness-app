@@ -1,9 +1,11 @@
 // The built-in exercise library: the common gym lifts, named plainly as
-// "Equipment + movement" (e.g. "Machine Incline Press"). Each one points at
-// a drawn animation pattern in figures.js (`fig`) and gets short how-to
-// steps for that movement.
+// "Equipment + movement" (e.g. "Machine Incline Press"), each with short
+// how-to steps for its movement pattern (`fig`) and an illustration (`art`):
+// three line-art frames in public/exercise-art/<art>/frame-1..3.svg, from
+// Workout Guide by Bryl Lim, based on Everkinetic — CC BY-SA 4.0 (see
+// public/exercise-art/ATTRIBUTION.md).
 
-// [id, name, category, equipment, figure pattern]
+// [id, name, category, equipment, movement pattern (for the how-to steps)]
 const RAW = [
   // ---------- Chest ----------
   ["barbell-bench-press", "Barbell Bench Press", "Chest", "barbell", "benchPress"],
@@ -182,7 +184,114 @@ const HOW = {
   stand: ["Set up in a stable position.", "Move the weight through a full, controlled range.", "Return slowly to the start."]
 };
 
+// Which illustration each exercise uses (Workout Guide slug).
+const ART = {
+  "barbell-bench-press": "bench-press",
+  "dumbbell-bench-press": "dumbbell-bench-press",
+  "machine-chest-press": "machine-chest-press",
+  "smith-bench-press": "smith-machine-bench-press",
+  "barbell-incline-press": "incline-bench-press",
+  "dumbbell-incline-press": "incline-dumbbell-press",
+  "machine-incline-press": "machine-chest-press",
+  "barbell-decline-press": "decline-bench-press",
+  "dumbbell-fly": "dumbbell-fly",
+  "cable-fly": "cable-fly",
+  "machine-fly": "pec-deck",
+  "push-up": "push-up",
+  "chest-dip": "chest-dip",
+  "dumbbell-decline-press": "decline-dumbbell-press",
+  "cable-chest-press": "incline-cable-fly",
+  "pull-up": "pull-up",
+  "chin-up": "chin-up",
+  "machine-assisted-pull-up": "assisted-pull-up",
+  "cable-lat-pulldown": "lat-pulldown",
+  "cable-close-grip-pulldown": "close-grip-lat-pulldown",
+  "machine-lat-pulldown": "wide-grip-lat-pulldown",
+  "barbell-row": "barbell-row",
+  "dumbbell-row": "one-arm-dumbbell-row",
+  "cable-seated-row": "seated-row",
+  "machine-row": "machine-row",
+  "machine-t-bar-row": "t-bar-row",
+  "cable-straight-arm-pulldown": "straight-arm-pulldown",
+  "barbell-deadlift": "deadlift",
+  "barbell-shrug": "shrug",
+  "dumbbell-shrug": "dumbbell-shrug",
+  "back-extension": "back-extension",
+  "barbell-overhead-press": "overhead-press",
+  "dumbbell-shoulder-press": "seated-dumbbell-press",
+  "machine-shoulder-press": "machine-shoulder-press",
+  "dumbbell-arnold-press": "arnold-press",
+  "dumbbell-lateral-raise": "lateral-raise",
+  "cable-lateral-raise": "cable-lateral-raise",
+  "machine-lateral-raise": "machine-lateral-raise",
+  "dumbbell-front-raise": "front-raise",
+  "cable-front-raise": "cable-front-raise",
+  "dumbbell-rear-delt-fly": "rear-delt-fly",
+  "machine-rear-delt-fly": "reverse-pec-deck",
+  "cable-face-pull": "face-pull",
+  "barbell-upright-row": "upright-row",
+  "cable-upright-row": "upright-row",
+  "smith-shoulder-press": "machine-shoulder-press",
+  "barbell-squat": "squat",
+  "barbell-front-squat": "front-squat",
+  "dumbbell-goblet-squat": "goblet-squat",
+  "smith-squat": "smith-machine-squat",
+  "machine-hack-squat": "hack-squat",
+  "machine-leg-press": "leg-press",
+  "barbell-romanian-deadlift": "romanian-deadlift",
+  "dumbbell-romanian-deadlift": "dumbbell-romanian-deadlift",
+  "dumbbell-lunge": "reverse-lunge",
+  "barbell-lunge": "walking-lunge",
+  "dumbbell-bulgarian-split-squat": "bulgarian-split-squat",
+  "dumbbell-step-up": "step-up",
+  "machine-leg-extension": "leg-extension",
+  "machine-lying-leg-curl": "lying-leg-curl",
+  "machine-seated-leg-curl": "seated-leg-curl",
+  "machine-standing-calf-raise": "standing-calf-raise",
+  "machine-seated-calf-raise": "seated-calf-raise",
+  "barbell-hip-thrust": "hip-thrust",
+  "machine-hip-abduction": "hip-abduction-machine",
+  "machine-hip-adduction": "hip-adduction-machine",
+  "cable-glute-kickback": "cable-kickback",
+  "kettlebell-swing": "kettlebell-swing",
+  "bodyweight-squat": "bodyweight-squat",
+  "walking-lunge": "forward-lunge",
+  "barbell-sumo-deadlift": "sumo-deadlift",
+  "barbell-good-morning": "good-morning",
+  "barbell-curl": "ez-bar-curl",
+  "ez-bar-curl": "ez-bar-curl",
+  "dumbbell-curl": "bicep-curl",
+  "dumbbell-hammer-curl": "hammer-curl",
+  "dumbbell-incline-curl": "incline-dumbbell-curl",
+  "dumbbell-concentration-curl": "concentration-curl",
+  "cable-curl": "cable-curl",
+  "machine-preacher-curl": "preacher-curl",
+  "cable-triceps-pushdown": "tricep-pushdown",
+  "cable-rope-pushdown": "rope-tricep-pushdown",
+  "cable-overhead-triceps-extension": "overhead-tricep-extension",
+  "dumbbell-overhead-triceps-extension": "dumbbell-overhead-tricep-extension",
+  "barbell-skull-crusher": "skull-crusher",
+  "barbell-close-grip-bench-press": "close-grip-bench-press",
+  "machine-triceps-extension": "tricep-pushdown",
+  "triceps-dip": "dip",
+  "dumbbell-skull-crusher": "dumbbell-skull-crusher",
+  "cable-hammer-curl": "rope-hammer-curl",
+  "barbell-reverse-curl": "reverse-curl",
+  "crunch": "crunch",
+  "cable-crunch": "cable-crunch",
+  "machine-crunch": "weighted-crunch",
+  "hanging-leg-raise": "hanging-leg-raise",
+  "lying-leg-raise": "lying-leg-raise",
+  "plank": "plank",
+  "side-plank": "side-plank",
+  "dumbbell-russian-twist": "weighted-russian-twist",
+  "ab-wheel-rollout": "ab-wheel",
+  "cable-woodchopper": "cable-woodchop",
+  "bicycle-crunch": "bicycle-crunch",
+  "decline-crunch": "decline-sit-up"
+};
+
 export const LIBRARY = RAW.map(([id, name, cat, equipment, fig]) => ({
-  id, name, cat, equipment, fig, isCustom: false,
+  id, name, cat, equipment, fig, art: ART[id] || null, isCustom: false,
   instructions: HOW[fig] || HOW.stand
 }));

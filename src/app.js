@@ -1,6 +1,5 @@
 import { supabase } from "./supabaseClient.js";
 import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary, fetchLegacyExercises } from "./exercises.js";
-import { figureSvg } from "./figures.js";
 import {
   uid, byId, toKg, fromKg, roundDisp, parseNum, fmtNum,
   fmtDate, fmtShort, fmtDuration, fmtClock, fmtElapsed, escapeHtml
@@ -16,6 +15,7 @@ import { needsOnboarding, runOnboarding, openPrivacySheet } from "./onboarding.j
 import { mountNotifications, tabFromUrl } from "./notifications.js";
 import { pushSupport, isPushEnabled, enablePush, disablePush, syncPushSubscription } from "./push.js";
 import { celebrateSet } from "./fx.js";
+import { exerciseArtHtml, ART_CREDIT } from "./setcards.js";
 import { templateSets, buildTarget, exerciseCardHtml, chainHtml, choiceDialog, pickRest, exerciseMenu, openProgression, ICONS } from "./setcards.js";
 
 export async function mountApp(root, user) {
@@ -1459,7 +1459,7 @@ export async function mountApp(root, user) {
       const pr = bestPr(e.id);
       return `
         <div class="ex-row" data-id="${e.id}">
-          <span class="ex-fig" aria-hidden="true">${figureSvg(e, { pose: "auto", fit: true })}</span>
+          <span class="ex-fig" aria-hidden="true">${exerciseArtHtml(e)}</span>
           <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
           <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.isCustom ? "Custom" : EQUIP_LABEL[e.equipment] || "")}</div></div>
           ${e.isCustom
@@ -1740,7 +1740,7 @@ export async function mountApp(root, user) {
         <span class="ex-tag">${escapeHtml(ex.cat)}</span>
         ${ex.isCustom ? '<span class="ex-tag">Custom</span>' : EQUIP_LABEL[ex.equipment] ? `<span class="ex-tag">${EQUIP_LABEL[ex.equipment]}</span>` : ""}
       </div>
-      ${ex.fig ? `<div class="ex-demo">${figureSvg(ex, { animate: true })}</div>` : ""}
+      ${ex.art ? `<div class="ex-demo">${exerciseArtHtml(ex, { animate: true })}</div><p class="art-credit faint">${ART_CREDIT}</p>` : ""}
       ${statsHtml}
       ${actionHtml}
       ${instrHtml ? `<ol class="ex-instructions">${instrHtml}</ol>` : '<p class="muted">No step-by-step instructions for this one yet.</p>'}

@@ -268,10 +268,18 @@ built-in library works normally either way.
 
 The built-in library (`src/library.js`) is a hand-picked list of about 100
 common gym exercises with plain names ("Barbell Bench Press", "Machine
-Incline Press", "Cable Lat Pulldown"…), each with short how-to steps. Every
-exercise has a drawn mannequin animation (`src/figures.js`): a grey figure
-moving between the start and end of the lift, with the equipment drawn in.
-They're plain SVG, so there are no image files to load.
+Incline Press", "Cable Lat Pulldown"…), each with short how-to steps.
+
+The exercise illustrations (`public/exercise-art/`) are from
+[Workout Guide](https://github.com/bryllim/workout-guide) by Bryl Lim, which
+builds on the [Everkinetic](https://github.com/everkinetic/data) exercise
+drawings. They're licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) — free to use
+with credit, and any changes to the images themselves must be shared under the
+same license. The license and full attribution are kept next to the images
+(`LICENSE.txt`, `ATTRIBUTION.md`), and every exercise's detail screen shows a
+credit line. Each exercise has three frames; the detail screen cross-fades
+between them to show the movement, and lists/cards show the first frame.
 
 Older versions used a much larger library. `public/exercises-legacy.json`
 maps each of those old exercises to its new equivalent, and the app applies
@@ -300,7 +308,6 @@ src/
   supabaseClient.js   Supabase client setup
   exercises.js        Starter templates + loading the library and old-exercise mapping
   library.js          The ~100 built-in exercises (names, equipment, how-to steps)
-  figures.js          Drawn mannequin animations for each exercise
   chart.js            Small SVG progress chart
   utils.js            Formatting/unit-conversion helpers
   style.css           All styling

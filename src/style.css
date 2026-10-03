@@ -1043,28 +1043,18 @@ body.has-wbar .toast{bottom:calc(var(--navh) + 104px + var(--safe-b));}
 .prog-row span:last-child{text-align:right; overflow-wrap:anywhere;}
 
 
-/* ---------- drawn exercise figures (figures.js) ---------- */
-.fig{display:block; width:100%; height:100%; overflow:visible;}
-.fig line{stroke-linecap:round;}
-.fg-torso{stroke:#DCE0E8; stroke-width:9.5;}
-.fg-limb{stroke:#C7CCD7; stroke-width:5.6;}
-.fg-foot{stroke:#C7CCD7; stroke-width:4.4;}
-.fg-far .fg-limb, .fg-far .fg-foot{stroke:#7C8394;}
-.fg-head{fill:#DCE0E8;}
-.fg-floor{stroke:#343947; stroke-width:1.4;}
-.fg-bench{fill:#343947;}
-.fg-frame{stroke:#343947; stroke-width:2.2;}
-.fg-pad{stroke:#4A5062; stroke-width:5;}
-.fg-pad-r{fill:#4A5062;}
-.fg-bar{stroke:#8C93A3; stroke-width:2.4;}
-.fg-plate{fill:#555C6E; stroke:#9AA1B1; stroke-width:1;}
-.fg-hub{fill:#C7CCD7;}
-.fg-db{fill:#8C93A3;}
-.fg-db-end{fill:#B4BAC6; stroke:#B4BAC6;}
-.fg-handle{fill:#A5B4FC;}
-.fg-cable{stroke:#818CF8; stroke-width:1.1;}
-.fg-pulley{fill:#2A2E3A; stroke:#818CF8; stroke-width:1;}
-.xc-thumb .fig{position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px);}
-.ex-fig .fig, .xc-thumb .fig{overflow:hidden;}
-.ex-fig{flex-shrink:0; width:46px; height:46px; padding:2px; border-radius:var(--r-m); background:var(--surface-2); border:1px solid var(--border);}
-.ex-demo .fig{width:100%; height:100%;}
+/* ---------- exercise illustrations (Workout Guide / Everkinetic, CC BY-SA 4.0) ---------- */
+.art-img{display:block; width:100%; height:100%; object-fit:contain; opacity:.92;}
+.art-none{display:flex; align-items:center; justify-content:center; width:100%; height:100%; color:var(--ink-faint);}
+.art-none svg{width:20px; height:20px;}
+.xc-thumb .art-img{position:absolute; inset:2px; width:calc(100% - 4px); height:calc(100% - 4px);}
+.ex-fig{flex-shrink:0; width:48px; height:48px; padding:2px; border-radius:var(--r-m); background:var(--surface-2); border:1px solid var(--border); overflow:hidden;}
+/* detail view: the three frames cross-fade in a loop (start → middle → end) */
+.art-anim{position:relative; width:100%; height:100%;}
+.art-anim img{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; opacity:0; animation:artCycle 3.6s infinite;}
+.art-anim img:nth-child(2){animation-delay:1.2s;}
+.art-anim img:nth-child(3){animation-delay:2.4s;}
+@keyframes artCycle{0%{opacity:0;} 4%{opacity:1;} 33%{opacity:1;} 37%{opacity:0;} 100%{opacity:0;}}
+@media (prefers-reduced-motion: reduce){ .art-anim img{animation:none;} .art-anim img:first-child{opacity:1;} }
+.art-credit{font-size:11px; margin-top:calc(var(--s2) * -1);}
+.art-credit a{color:inherit; text-decoration:underline; text-underline-offset:2px;}
