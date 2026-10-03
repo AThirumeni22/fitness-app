@@ -8,7 +8,25 @@ export function openTemplateEditor(ctx, template) {
   const isBuiltIn = !!(template && !template.isCustom);
   let name = template ? template.name : "";
   let ids = template ? [...template.exerciseIds] : [];
-  let targets = template ? { ...template.targets } : {};
+  // Show (and save) target weights in the current unit, tagged with it.
+  let targets = {};
+  Object.entries((template && template.targets) || {}).forEach(([id, tg]) => {
+    const w = ctx.targetWeight(tg);
+    targets[id] = { ...tg, weight: w, unit: state.unit };
+  });
+  let dirty = false;
+
+  // Closing with unsaved edits (×, backdrop or pull-down) asks first.
+  async function confirmClose() {
+    if (!dirty) return true;
+    return ctx.confirm({
+      title: "Discard changes?",
+      message: "Your edits to this template haven't been saved.",
+      confirmText: "Discard",
+      cancelText: "Keep editing",
+      danger: true
+    });
+  }
 
   function targetFor(id) {
     const t = targets[id] || {};
@@ -57,13 +75,13 @@ export function openTemplateEditor(ctx, template) {
       ${ids.length ? `<div class="tpl-edit-list" id="tplEditRows">${rowsHtml}</div>` : '<p class="muted">No exercises yet — add some below.</p>'}
       <button class="btn btn-secondary btn-block" id="addExToTplBtn">+ Add exercise</button>
       <button class="btn btn-primary btn-block" id="saveTplEditBtn">Save Template</button>
-    `);
+    `, { beforeClose: confirmClose });
     bind();
   }
 
   function bind() {
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
-    document.getElementById("tplNameInput").addEventListener("input", syncName);
+    document.getElementById("tplNameInput").addEventListener("input", () => { syncName(); dirty = true; });
     document.querySelectorAll(".t-sets, .t-reps, .t-weight, .t-rest").forEach((inp) => inp.addEventListener("input", (e) => {
       const i = parseInt(e.target.getAttribute("data-i"), 10);
       const id = ids[i];
@@ -74,13 +92,15 @@ export function openTemplateEditor(ctx, template) {
       const raw = e.target.value;
       const parsed = ctx.parseNum(raw);
       const v = raw === "" || isNaN(parsed) ? (field === "sets" ? 3 : field === "rest" ? 90 : null) : parsed;
-      targets[id] = { ...cur, [field]: v };
+      targets[id] = { ...cur, [field]: v, unit: state.unit };
+      dirty = true;
     }));
     document.querySelectorAll(".move-up").forEach((b) => b.addEventListener("click", () => {
       syncName();
       const i = parseInt(b.getAttribute("data-i"), 10);
       if (i <= 0) return;
       [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+      dirty = true;
       draw();
     }));
     document.querySelectorAll(".move-down").forEach((b) => b.addEventListener("click", () => {
@@ -88,6 +108,7 @@ export function openTemplateEditor(ctx, template) {
       const i = parseInt(b.getAttribute("data-i"), 10);
       if (i >= ids.length - 1) return;
       [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]];
+      dirty = true;
       draw();
     }));
     document.querySelectorAll(".remove-ex").forEach((b) => b.addEventListener("click", () => {
@@ -95,14 +116,16 @@ export function openTemplateEditor(ctx, template) {
       const i = parseInt(b.getAttribute("data-i"), 10);
       delete targets[ids[i]];
       ids.splice(i, 1);
+      dirty = true;
       draw();
     }));
     document.getElementById("addExToTplBtn").addEventListener("click", () => {
       syncName();
+      // Closing the picker comes back here with everything intact.
       ctx.openExercisePicker("Add Exercise", (id) => {
-        if (!ids.includes(id)) ids.push(id);
+        if (!ids.includes(id)) { ids.push(id); dirty = true; }
         draw();
-      });
+      }, { onClose: draw, exclude: ids });
     });
     document.getElementById("saveTplEditBtn").addEventListener("click", save);
   }
@@ -118,12 +141,14 @@ export function openTemplateEditor(ctx, template) {
       if (isNew || isBuiltIn) {
         const created = await ctx.db.addTemplate(ctx.user.id, trimmed, ids, targets);
         state.templates.push(created);
+        if (isBuiltIn) ctx.replaceBuiltinWithCopy(template, created);
       } else {
         const updated = await ctx.db.updateTemplate(template.id, trimmed, ids, targets);
         const idx = state.templates.findIndex((t) => t.id === template.id);
         if (idx > -1) state.templates[idx] = updated;
       }
-      closeSheet();
+      dirty = false;
+      closeSheet(true);
       ctx.renderCurrentTab();
       toast("Template saved");
     } catch (err) {

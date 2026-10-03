@@ -165,14 +165,24 @@ export async function listWorkouts(userId) {
   }));
 }
 
+// Returns the new row's id so the workout can be deleted later.
 export async function saveWorkout(userId, workout) {
-  const { error } = await supabase.from("workouts").insert({
+  const { data, error } = await supabase.from("workouts").insert({
     user_id: userId,
     date: workout.date,
     duration_sec: workout.durationSec,
     exercises: workout.exercises
-  });
+  }).select("id").single();
   if (error) throw error;
+  return data.id;
+}
+
+// Needs migration_7 (the delete policy). Without it RLS silently matches no
+// rows, so the deleted-row count is checked to tell the two cases apart.
+export async function deleteWorkout(id) {
+  const { data, error } = await supabase.from("workouts").delete().eq("id", id).select("id");
+  if (error) throw error;
+  if (!data || !data.length) throw new Error("not-deleted");
 }
 
 // Own workouts + friends' workouts in a date range (used by the calendar).

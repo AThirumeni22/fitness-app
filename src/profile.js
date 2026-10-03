@@ -85,7 +85,13 @@ export function openProfileSheet(ctx) {
     pushBusy = false; draw();
   }
 
+  let draftName = state.profile.displayName || "";
+  let drawn = false;
   function draw() {
+    // Redraws (unit / notification toggles, new photo) keep a typed-but-unsaved name.
+    const nameInp = drawn && document.getElementById("displayNameInput");
+    if (nameInp) draftName = nameInp.value;
+    drawn = true;
     const initial = (state.profile.displayName || user.email || "?").trim().charAt(0).toUpperCase();
     openSheet(`
       <div class="sheet-title"><h3>Your Profile</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -96,7 +102,7 @@ export function openProfileSheet(ctx) {
         <input type="file" id="avatarInput" accept="image/*" hidden>
         <button class="btn btn-secondary btn-sm" id="pickAvatarBtn">Change photo</button>
       </div>
-      <div class="field"><label for="displayNameInput">Name</label><input type="text" id="displayNameInput" placeholder="What friends see" autocomplete="nickname" maxlength="40" value="${escapeHtml(state.profile.displayName || "")}"></div>
+      <div class="field"><label for="displayNameInput">Name</label><input type="text" id="displayNameInput" placeholder="What friends see" autocomplete="nickname" maxlength="40" value="${escapeHtml(draftName)}"></div>
       <p class="muted">Friends see this name instead of your email: in Friends, the Calendar, gym-time plans and shared templates.</p>
       <button class="btn btn-primary btn-block" id="saveProfileBtn">Save</button>
 

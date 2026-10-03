@@ -46,6 +46,10 @@ no server to run yourself.
    reminder job. If it stops with an error about `pg_cron`, enable
    **pg_cron** under **Database -> Extensions** and run it again. Then
    finish the notification setup in [Notifications](#4-notifications).
+2g. Run a seventh query with the contents of
+   [`supabase/migration_7_workout_delete.sql`](./supabase/migration_7_workout_delete.sql).
+   It lets people delete their own workouts from History (e.g. one logged
+   by mistake) — run it once, after migration_6_notifications.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -215,6 +219,16 @@ check the phone's notification settings for Obonto, and look at
   own rest timer automatically. The pencil icon opens the template
   editor, where you can reorder exercises, add/remove them, and set a
   target sets/reps/weight/rest per exercise for the player to use.
+- **Last time** — every exercise in a workout shows what you did for it
+  last session (as faint hints in each set, plus a "Last: 60×8, 60×8" line
+  you can tap to fill them in). Sets logged with reps but no weight count
+  as bodyweight and show as "BW".
+- **Exercise picker & details** — "Add exercise" lists your recent
+  exercises first. Tapping a library exercise shows your best, how often
+  you've done it and your last session, with a button to add it to the
+  current workout (or start one with it).
+- **Delete a workout** — open it in History and tap "Delete workout"
+  (needs migration_7).
 - **Per-exercise rest timer** — each exercise in a template can have its
   own rest duration (set in the template editor); exercises without one
   fall back to the default rest timer from your Profile settings. When
@@ -285,6 +299,7 @@ supabase/
   migration_4_template_prefs.sql Adds pinned/hidden template preferences per profile
   migration_5_onboarding_sharing.sql Privacy consent columns + template_shares table
   migration_6_notifications.sql Notifications, push subscriptions, "can't make it", reminders
+  migration_7_workout_delete.sql Lets people delete their own workouts
   functions/send-push/index.ts  Edge Function that delivers push notifications
 ```
 

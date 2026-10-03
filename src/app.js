@@ -120,6 +120,56 @@ export async function mountApp(root, user) {
     renderCurrentTab();
   }
 
+  // Built-ins live in code, so editing one saves a personal copy: hide the
+  // original and move its pin to the copy, rather than leaving two
+  // "Push Day"s side by side.
+  function replaceBuiltinWithCopy(oldT, created) {
+    const wasPinned = isPinnedTemplate(oldT.id);
+    const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
+    if (!hidden.includes(oldT.id)) hidden.push(oldT.id);
+    const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
+    const pi = pinned.indexOf(oldT.id);
+    if (pi > -1) pinned.splice(pi, 1);
+    if (wasPinned) pinned.push(created.id);
+    saveTemplatePrefs();
+  }
+
+  // Template target weights are saved with the unit they were typed in
+  // ({ weight, unit }); older targets have no unit and are taken as-is.
+  // Returns the weight in the current display unit, or null if none.
+  function targetWeight(tg) {
+    if (!tg || tg.weight == null || tg.weight === "" || isNaN(tg.weight)) return null;
+    const from = tg.unit === "kg" || tg.unit === "lb" ? tg.unit : state.unit;
+    return from === state.unit ? Number(tg.weight) : roundDisp(fromKg(toKg(Number(tg.weight), from), state.unit));
+  }
+
+  // The sets from the most recent finished workout that included exId
+  // (history is kept newest first).
+  function lastSetsFor(exId) {
+    for (const sess of state.history) {
+      const ex = sess.exercises.find((e) => e.exerciseId === exId);
+      if (ex && ex.sets.length) return { date: sess.date, sets: ex.sets };
+    }
+    return null;
+  }
+
+  // Up to `limit` distinct exercises from recent workouts, newest first.
+  function recentExerciseIds(exclude = [], limit = 8) {
+    const out = [];
+    for (const sess of state.history) {
+      for (const ex of sess.exercises) {
+        if (out.length >= limit) return out;
+        if (!out.includes(ex.exerciseId) && !exclude.includes(ex.exerciseId) && byId(state.exercises, ex.exerciseId)) out.push(ex.exerciseId);
+      }
+    }
+    return out;
+  }
+
+  // "60×8", or "BW×10" for a bodyweight set logged without a weight.
+  function fmtSet(s) {
+    return `${s.kg ? fmtNum(fromKg(s.kg, state.unit)) : "BW"}×${s.reps}`;
+  }
+
   // Shared context handed to the friends/calendar/profile/player modules —
   // assigned once every function below exists (see bottom of mountApp).
   // Referencing `ctx` inside a listener attached before that point is safe:
@@ -307,7 +357,13 @@ export async function mountApp(root, user) {
     window.scrollTo(0, lockedScrollY);
   }
 
-  function openSheet(html) {
+  // A sheet can pass { beforeClose } to intercept every way of closing it
+  // (×, backdrop, pull-down): return true to close, false to stay open —
+  // e.g. "Discard changes?" in the template editor. Opening a new sheet
+  // replaces the guard.
+  let sheetGuard = null;
+  function openSheet(html, opts = {}) {
+    sheetGuard = opts.beforeClose || null;
     if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
     const sh = document.getElementById("sheet");
     const inner = document.getElementById("sheetInner");
@@ -322,10 +378,25 @@ export async function mountApp(root, user) {
     sh.hidden = false;
     lockScroll();
   }
-  function closeSheet() {
-    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
+  function closeSheet(force) {
     const sh = document.getElementById("sheet");
     if (sh.hidden || sh.classList.contains("closing")) return;
+    if (sheetGuard && force !== true) {
+      const guard = sheetGuard;
+      Promise.resolve(guard()).then((ok) => {
+        if (ok) { if (sheetGuard === guard) sheetGuard = null; closeSheet(true); return; }
+        // Staying open: undo any half-finished pull-down.
+        const inner = document.getElementById("sheetInner");
+        if (inner.style.transform) {
+          inner.classList.add("snap");
+          inner.style.transform = "";
+          setTimeout(() => inner.classList.remove("snap"), 300);
+        }
+      });
+      return;
+    }
+    sheetGuard = null;
+    if (activeDetailInterval) { clearInterval(activeDetailInterval); activeDetailInterval = null; }
     // let the sheet slide away before hiding it
     sh.classList.add("closing");
     clearTimeout(closeSheet._h);
@@ -421,8 +492,22 @@ export async function mountApp(root, user) {
   let playerArmed = false;
   let manualPtr = null;
 
-  function startWorkout(templateId, guided) {
+  // Resolves true once the workout has started, false if the person chose
+  // to keep the one already in progress.
+  async function startWorkout(templateId, guided, firstExerciseId) {
+    const cur = state.active;
+    if (cur && cur.exercises.some((ex) => ex.sets.some((s) => s.done || s.kg != null || s.reps != null))) {
+      const ok = await confirmDialog({
+        title: "Replace your current workout?",
+        message: "You have a workout in progress. Starting a new one discards it and everything logged so far.",
+        confirmText: "Discard & start new",
+        cancelText: "Keep current",
+        danger: true
+      });
+      if (!ok) return false;
+    }
     let exList = [];
+    if (firstExerciseId) exList = [{ exerciseId: firstExerciseId, sets: [{ kg: null, reps: null, done: false }] }];
     if (templateId) {
       const t = byId(state.templates, templateId);
       if (t) {
@@ -430,9 +515,11 @@ export async function mountApp(root, user) {
           exList = t.exerciseIds.map((id) => {
             const tg = (t.targets && t.targets[id]) || {};
             const n = tg.sets || 3;
+            const tw = targetWeight(tg);
             return {
               exerciseId: id,
-              target: { sets: n, reps: tg.reps || null, weight: tg.weight || null, rest: tg.rest || state.restDuration },
+              // weightKg so the target still reads right if the unit is switched mid-workout
+              target: { sets: n, reps: tg.reps || null, weightKg: tw != null ? toKg(tw, state.unit) : null, rest: tg.rest || state.restDuration },
               sets: Array.from({ length: n }, () => ({ kg: null, reps: null, done: false }))
             };
           });
@@ -449,7 +536,8 @@ export async function mountApp(root, user) {
     state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided, templateId: templateId || null };
     saveActiveDraft();
     renderTrain();
-    toast(templateId ? (guided ? "Guided workout started" : "Workout started") : "Empty workout started");
+    toast(templateId ? (guided ? "Guided workout started" : "Workout started") : firstExerciseId ? "Workout started" : "Empty workout started");
+    return true;
   }
 
   // After a template-based workout: offer to write today's numbers back into
@@ -466,15 +554,19 @@ export async function mountApp(root, user) {
       const top = ex.sets.reduce((best, st) => (!best || st.kg > best.kg || (st.kg === best.kg && st.reps > best.reps) ? st : best), null);
       if (!top) return;
       const old = newTargets[ex.exerciseId] || {};
-      const next = { ...old, sets: ex.sets.length, reps: top.reps, weight: roundDisp(fromKg(top.kg, state.unit)) };
-      if (next.sets !== (old.sets || 3) || next.reps !== old.reps || next.weight !== old.weight) {
+      const next = { ...old, sets: ex.sets.length, reps: top.reps, weight: roundDisp(fromKg(top.kg, state.unit)), unit: state.unit };
+      if (next.sets !== (old.sets || 3) || next.reps !== old.reps || next.weight !== targetWeight(old)) {
         changes.push({ name: ex.name, old, next });
         newTargets[ex.exerciseId] = next;
       }
     });
     if (!changes.length) return;
 
-    const fmtT = (o) => o.weight != null && o.weight !== "" ? `${o.sets || 3}×${o.reps || "?"} @ ${fmtNum(o.weight)} ${state.unit}` : "no target";
+    const fmtT = (o) => {
+      const w = targetWeight(o);
+      if (w == null) return "no target";
+      return `${o.sets || 3}×${o.reps || "?"} @ ${w ? `${fmtNum(w)} ${state.unit}` : "bodyweight"}`;
+    };
     const rowsHtml = changes.map((c) => `
       <div class="upd-row">
         <div class="upd-name">${escapeHtml(c.name)}</div>
@@ -499,19 +591,9 @@ export async function mountApp(root, user) {
           const idx = state.templates.findIndex((x) => x.id === t.id);
           if (idx > -1) state.templates[idx] = updated;
         } else {
-          // Built-ins live in code, so save a personal copy and swap it in
-          // for the original (keeping its pin), rather than ending up with
-          // two "Push Day"s side by side.
           const created = await db.addTemplate(user.id, t.name, t.exerciseIds, newTargets);
           state.templates.push(created);
-          const wasPinned = isPinnedTemplate(t.id);
-          const hidden = state.templatePrefs.hiddenBuiltin || (state.templatePrefs.hiddenBuiltin = []);
-          if (!hidden.includes(t.id)) hidden.push(t.id);
-          const pinned = state.templatePrefs.pinned || (state.templatePrefs.pinned = []);
-          const pi = pinned.indexOf(t.id);
-          if (pi > -1) pinned.splice(pi, 1);
-          if (wasPinned) pinned.push(created.id);
-          saveTemplatePrefs();
+          replaceBuiltinWithCopy(t, created);
         }
         closeSheet();
         renderCurrentTab();
@@ -526,11 +608,13 @@ export async function mountApp(root, user) {
   async function finishWorkout() {
     const a = state.active;
     if (!a) return;
+    // A set counts once it has reps; no weight means bodyweight (0 kg), so
+    // pull-ups, dips etc. aren't silently dropped.
     const cleanEx = a.exercises
       .map((ex) => ({
         exerciseId: ex.exerciseId,
         name: exName(ex.exerciseId),
-        sets: ex.sets.filter((s) => s.kg != null && s.reps != null)
+        sets: ex.sets.filter((s) => s.reps != null && s.reps > 0).map((s) => ({ kg: s.kg != null ? s.kg : 0, reps: s.reps }))
       }))
       .filter((ex) => ex.sets.length > 0);
 
@@ -554,8 +638,8 @@ export async function mountApp(root, user) {
       exercises: cleanEx
     };
     try {
-      await db.saveWorkout(user.id, workout);
-      state.history.unshift({ id: uid(), ...workout });
+      const id = await db.saveWorkout(user.id, workout);
+      state.history.unshift({ id: id || uid(), ...workout });
       state.active = null;
       state.timer = null;
       playerArmed = false; manualPtr = null;
@@ -628,27 +712,37 @@ export async function mountApp(root, user) {
     const target = ex.target || {};
     const prevBest = bestPr(ex.exerciseId);
     const lastSet = ptr.si > 0 ? ex.sets[ptr.si - 1] : null;
-    const defaultW = set.kg != null ? fmtNum(fromKg(set.kg, state.unit))
-      : lastSet && lastSet.kg != null ? fmtNum(fromKg(lastSet.kg, state.unit))
-      : target.weight != null && target.weight !== "" ? fmtNum(target.weight)
-      : prevBest ? fmtNum(fromKg(prevBest, state.unit)) : "";
+    // Target weight in the current unit (drafts from before targets were
+    // kept in kg still carry a plain `weight`).
+    const tW = target.weightKg != null ? roundDisp(fromKg(target.weightKg, state.unit))
+      : target.weight != null && target.weight !== "" ? Number(target.weight) : null;
+    const lastTime = lastSetsFor(ex.exerciseId);
+    const lastTimeSet = lastTime ? lastTime.sets[Math.min(ptr.si, lastTime.sets.length - 1)] : null;
+    const wStr = (kg) => (kg ? fmtNum(fromKg(kg, state.unit)) : "");
+    const defaultW = set.kg != null ? wStr(set.kg)
+      : lastSet && lastSet.kg != null ? wStr(lastSet.kg)
+      : tW != null ? (tW ? fmtNum(tW) : "")
+      : lastTimeSet ? wStr(lastTimeSet.kg)
+      : prevBest ? wStr(prevBest) : "";
     const defaultReps = set.reps != null ? set.reps
       : lastSet && lastSet.reps != null ? lastSet.reps
-      : target.reps != null ? target.reps : "";
+      : target.reps != null ? target.reps
+      : lastTimeSet ? lastTimeSet.reps : "";
 
     el.innerHTML = headHtml + `
       <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
       <div class="card center player-card">
         <div class="stack-sm">
         <h2>${escapeHtml(exName(ex.exerciseId))}</h2>
-        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${target.weight ? ` @ ${fmtNum(target.weight)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
+        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${tW ? ` @ ${fmtNum(tW)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
+        ${lastTime ? `<p class="faint last-time">Last time (${fmtShort(lastTime.date)}): ${escapeHtml(lastTime.sets.map(fmtSet).join(", "))}</p>` : ""}
         </div>
         ${!playerArmed ? `
           <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
           <button class="btn btn-ghost btn-block" id="skipSetBtn">Skip this set</button>
         ` : `
           <div class="field-row">
-            <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}"></div>
+            <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}" placeholder="BW"></div>
             <div class="field inline"><label>Reps</label><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" id="playerRepsInput" value="${defaultReps}"></div>
           </div>
           <button class="btn btn-primary btn-block btn-lg" id="completeSetBtn">✓ Mark Set Done</button>
@@ -673,14 +767,18 @@ export async function mountApp(root, user) {
       });
     } else {
       document.getElementById("completeSetBtn").addEventListener("click", () => {
-        const w = parseNum(document.getElementById("playerWeightInput").value);
+        const wRaw = document.getElementById("playerWeightInput").value.trim();
+        // Blank weight = bodyweight set (pull-ups, dips…).
+        const w = wRaw === "" ? 0 : parseNum(wRaw);
         const r = Math.round(parseNum(document.getElementById("playerRepsInput").value));
-        if (isNaN(w) || isNaN(r)) { toast("Enter both weight and reps"); return; }
+        if (isNaN(w) || w < 0) { toast("Check the weight — leave it empty for bodyweight"); return; }
+        if (isNaN(r) || r < 1) { toast("Enter how many reps you did"); return; }
         const kg = toKg(w, state.unit);
         set.kg = kg; set.reps = r; set.done = true;
         manualPtr = null;
         saveActiveDraft();
-        if (prevBest && kg > prevBest) toast(`New PR — ${fmtNum(w)} ${state.unit}`);
+        if (!kg) toast(`Set logged — ${r} reps`);
+        else if (prevBest && kg > prevBest) toast(`New PR — ${fmtNum(w)} ${state.unit}`);
         else if (prevBest && kg < prevBest) toast(`Logged — your best is ${fmtNum(fromKg(prevBest, state.unit))} ${state.unit}`);
         else toast("Set logged");
         startRestTimer(target.rest || state.restDuration);
@@ -864,13 +962,18 @@ export async function mountApp(root, user) {
 
     const a = state.active;
     const exCards = a.exercises.map((ex, exi) => {
+      const last = lastSetsFor(ex.exerciseId);
       const rows = ex.sets.map((s, si) => {
         const wDisp = s.kg != null ? fmtNum(fromKg(s.kg, state.unit)) : "";
+        // Placeholders show the matching set from last time as a hint.
+        const ls = last ? last.sets[si] : null;
+        const wPh = ls ? (ls.kg ? fmtNum(fromKg(ls.kg, state.unit)) : "BW") : state.unit;
+        const rPh = ls ? String(ls.reps) : "reps";
         return `
           <div class="set-row" data-exi="${exi}" data-si="${si}">
             <div class="set-num">${si + 1}</div>
-            <input type="text" inputmode="decimal" autocomplete="off" class="set-weight" placeholder="${state.unit}" value="${wDisp}">
-            <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="set-reps" placeholder="reps" value="${s.reps != null ? s.reps : ""}">
+            <input type="text" inputmode="decimal" autocomplete="off" class="set-weight" placeholder="${wPh}" value="${wDisp}" aria-label="Weight (${state.unit})">
+            <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="set-reps" placeholder="${rPh}" value="${s.reps != null ? s.reps : ""}" aria-label="Reps">
             <button class="set-done ${s.done ? "on" : ""}" title="Mark done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></button>
             <button class="set-del" title="Delete set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>`;
@@ -882,6 +985,9 @@ export async function mountApp(root, user) {
             <div><h3>${escapeHtml(exName(ex.exerciseId))}</h3><span class="cat-tag">${escapeHtml(exCat(ex.exerciseId))}</span></div>
             <button class="icon-btn remove-ex" title="Remove exercise" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>
+          ${last ? `<button type="button" class="last-line" title="Fill in last time's sets">
+            <span>Last (${fmtShort(last.date)}): ${escapeHtml(last.sets.map(fmtSet).join(", "))}</span><span class="last-copy">Use</span>
+          </button>` : ""}
           <div class="sets-table">
             <div class="sets-head"><span></span><span>Weight (${state.unit})</span><span>Reps</span><span></span><span></span></div>
             ${rows}
@@ -924,6 +1030,20 @@ export async function mountApp(root, user) {
     el.querySelectorAll(".remove-ex").forEach((b) => b.addEventListener("click", () => {
       const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
       a.exercises.splice(exi, 1);
+      saveActiveDraft(); renderTrain();
+    }));
+    // Copy last time's sets into the empty rows (adding rows if needed);
+    // anything already typed is left alone.
+    el.querySelectorAll(".last-line").forEach((b) => b.addEventListener("click", () => {
+      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
+      const ex = a.exercises[exi];
+      const last = lastSetsFor(ex.exerciseId);
+      if (!last) return;
+      last.sets.forEach((ls, i) => {
+        const s = ex.sets[i];
+        if (!s) ex.sets.push({ kg: ls.kg || null, reps: ls.reps, done: false });
+        else if (s.kg == null && s.reps == null) { s.kg = ls.kg || null; s.reps = ls.reps; }
+      });
       saveActiveDraft(); renderTrain();
     }));
     el.querySelectorAll(".add-set-btn").forEach((b) => b.addEventListener("click", () => {
@@ -973,19 +1093,29 @@ export async function mountApp(root, user) {
       saveActiveDraft();
       closeSheet();
       renderTrain();
-    });
+    }, { exclude: state.active.exercises.map((e) => e.exerciseId) });
   }
 
-  function renderPickerSheet(title, onPick) {
+  // opts.onClose: called instead of closing when the picker is dismissed
+  // (the template editor uses it to come back with its edits intact).
+  // opts.exclude: exercise ids to leave out of the "Recent" list.
+  function renderPickerSheet(title, onPick, opts = {}) {
     let activeCat = null;
     const MAX_RESULTS = 150;
+    const recent = recentExerciseIds(opts.exclude || []);
 
     function draw(filterRaw) {
       const q = (filterRaw || "").trim().toLowerCase();
       const chips = CAT_ORDER.map((c) => `<button class="cat-chip ${c === activeCat ? "active" : ""}" data-cat="${c}">${escapeHtml(c)}</button>`).join("");
 
       if (!q && !activeCat) {
-        return `<div class="cat-chip-row">${chips}</div><p class="pick-note">Search by name, or pick a category to browse.</p>`;
+        const recentHtml = recent.length ? `
+          <div class="section-label">Recent</div>
+          <div class="pick-list">${recent.map((id) => {
+            const e = byId(state.exercises, id);
+            return `<div class="pick-row" data-id="${id}"><span>${escapeHtml(e.name)}</span><span class="pick-eq">${escapeHtml(e.cat || "")}</span></div>`;
+          }).join("")}</div>` : "";
+        return `<div class="stack"><div class="cat-chip-row">${chips}</div>${recentHtml}<p class="pick-note">Search by name, or pick a category to browse.</p></div>`;
       }
 
       const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
@@ -1001,9 +1131,9 @@ export async function mountApp(root, user) {
 
     openSheet(`
       <div class="sheet-title"><h3>${title}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <div class="field"><input type="search" id="pickerSearch" placeholder="Search exercises…" autocomplete="off" enterkeyhint="search"></div>
+      <div class="field"><input type="search" id="pickerSearch" placeholder="Search exercises…" autocomplete="off" enterkeyhint="search" aria-label="Search exercises"></div>
       <div id="pickerBody">${draw("")}</div>
-    `);
+    `, opts.onClose ? { beforeClose: () => { opts.onClose(); return false; } } : {});
 
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     function bindAll() {
@@ -1172,9 +1302,10 @@ export async function mountApp(root, user) {
       sessHtml = state.history.map((sess) => {
         const vol = sess.exercises.reduce((sum, ex) => sum + ex.sets.reduce((s2, s) => s2 + (s.kg || 0) * (s.reps || 0), 0), 0);
         const exDetail = sess.exercises.map((ex) => {
-          const setsStr = ex.sets.map((s) => `${fmtNum(fromKg(s.kg, state.unit))}×${s.reps}`).join("  ");
-          return `<div class="session-ex"><div class="exn">${escapeHtml(ex.name)}</div><div class="exs">${setsStr} ${state.unit}</div></div>`;
-        }).join("");
+          const setsStr = ex.sets.map(fmtSet).join("  ");
+          const weighted = ex.sets.some((s) => s.kg);
+          return `<div class="session-ex"><div class="exn">${escapeHtml(ex.name)}</div><div class="exs">${setsStr}${weighted ? ` ${state.unit}` : ""}</div></div>`;
+        }).join("") + `<div class="session-actions"><button class="btn btn-danger btn-sm del-workout" data-id="${sess.id}">Delete workout</button></div>`;
         return `
           <div class="session-card" data-id="${sess.id}">
             <div class="session-head">
@@ -1196,6 +1327,31 @@ export async function mountApp(root, user) {
     }
 
     el.querySelectorAll(".session-card").forEach((card) => card.querySelector(".session-head").addEventListener("click", () => card.classList.toggle("open")));
+    el.querySelectorAll(".del-workout").forEach((b) => b.addEventListener("click", async () => {
+      const id = b.getAttribute("data-id");
+      const sess = state.history.find((s) => s.id === id);
+      if (!sess) return;
+      const ok = await confirmDialog({
+        title: "Delete this workout?",
+        message: `${fmtDate(sess.date)} · ${sess.exercises.length} exercise${sess.exercises.length === 1 ? "" : "s"}. This can't be undone, and it also disappears from your friends' feed and calendar.`,
+        confirmText: "Delete workout",
+        cancelText: "Keep it",
+        danger: true
+      });
+      if (!ok) return;
+      b.disabled = true; b.textContent = "Deleting…";
+      try {
+        await db.deleteWorkout(id);
+        state.history = state.history.filter((s) => s.id !== id);
+        renderHistory();
+        toast("Workout deleted");
+      } catch (err) {
+        toast(err.message === "not-deleted"
+          ? "Deleting needs a quick setup step — run migration_7 in Supabase (see README)"
+          : "Couldn't delete that: " + (err.message || String(err)));
+        b.disabled = false; b.textContent = "Delete workout";
+      }
+    }));
   }
 
   /* ================= EXERCISES ================= */
@@ -1348,8 +1504,8 @@ export async function mountApp(root, user) {
       renderLibrary();
     }));
 
-    el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id")); setTab("train"); }));
-    el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", () => { startWorkout(b.getAttribute("data-id"), true); setTab("train"); }));
+    el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", async () => { if (await startWorkout(b.getAttribute("data-id"))) setTab("train"); }));
+    el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", async () => { if (await startWorkout(b.getAttribute("data-id"), true)) setTab("train"); }));
     el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".share-tpl").forEach((b) => b.addEventListener("click", () => openShareSheet(byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".pin-tpl").forEach((b) => b.addEventListener("click", (e) => {
@@ -1439,8 +1595,11 @@ export async function mountApp(root, user) {
         send.disabled = true; send.textContent = "Sending…";
         const meta = {};
         t.exerciseIds.forEach((id) => { const e = byId(state.exercises, id); if (e) meta[id] = { name: e.name, cat: e.cat, custom: !!e.isCustom }; });
+        // Send every target weight in this person's current unit, matching `unit`.
+        const targets = {};
+        Object.entries(t.targets || {}).forEach(([id, tg]) => { targets[id] = { ...tg, weight: targetWeight(tg), unit: state.unit }; });
         try {
-          await db.shareTemplate(user.id, [...picked], { name: t.name, exerciseIds: t.exerciseIds, targets: t.targets || {}, exerciseMeta: meta, unit: state.unit });
+          await db.shareTemplate(user.id, [...picked], { name: t.name, exerciseIds: t.exerciseIds, targets, exerciseMeta: meta, unit: state.unit });
           closeSheet();
           toast(picked.size === 1 ? "Template shared" : `Shared with ${picked.size} friends`);
         } catch (err) {
@@ -1494,7 +1653,7 @@ export async function mountApp(root, user) {
       const targets = {};
       sh.exerciseIds.forEach((x) => {
         const tg = (sh.targets || {})[x];
-        if (tg) targets[idMap[x] || x] = { ...tg, weight: conv(tg.weight) };
+        if (tg) targets[idMap[x] || x] = { ...tg, weight: conv(tg.weight), unit: state.unit };
       });
       const taken = new Set(state.templates.map((t) => t.name));
       let name = sh.name;
@@ -1526,6 +1685,30 @@ export async function mountApp(root, user) {
     if (!ex) return;
     const hasImgs = Array.isArray(ex.images) && ex.images.length >= 2;
     const instrHtml = (ex.instructions || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+
+    // Your own numbers for this exercise.
+    let timesLogged = 0, prKg = 0, prDate = null;
+    state.history.forEach((sess) => sess.exercises.forEach((e) => {
+      if (e.exerciseId !== ex.id) return;
+      timesLogged++;
+      e.sets.forEach((s) => { if ((s.kg || 0) > prKg) { prKg = s.kg; prDate = sess.date; } });
+    }));
+    const last = lastSetsFor(ex.id);
+    const statsHtml = timesLogged ? `
+      <div class="ex-stats">
+        <div><span class="v">${prKg ? `${fmtNum(fromKg(prKg, state.unit))} ${state.unit}` : "BW"}</span><span class="l">Best${prDate ? ` · ${fmtShort(prDate)}` : ""}</span></div>
+        <div><span class="v">${timesLogged}</span><span class="l">Times logged</span></div>
+        <div><span class="v">${last ? fmtShort(last.date) : "—"}</span><span class="l">Last done</span></div>
+      </div>
+      ${last ? `<p class="faint">Last time: ${escapeHtml(last.sets.map(fmtSet).join(", "))}${last.sets.some((s) => s.kg) ? ` ${state.unit}` : ""}</p>` : ""}`
+      : `<p class="faint">You haven't logged this one yet.</p>`;
+    const inNormalWorkout = state.active && !state.active.guided;
+    const actionHtml = inNormalWorkout
+      ? (state.active.exercises.some((e) => e.exerciseId === ex.id)
+        ? `<button class="btn btn-secondary btn-block" disabled>Already in your workout</button>`
+        : `<button class="btn btn-primary btn-block" id="exDetailAdd">+ Add to current workout</button>`)
+      : !state.active ? `<button class="btn btn-primary btn-block" id="exDetailStart">Start a workout with this</button>` : "";
+
     openSheet(`
       <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="ex-tags">
@@ -1533,6 +1716,8 @@ export async function mountApp(root, user) {
         ${ex.equipment ? `<span class="ex-tag">${escapeHtml(ex.equipment)}</span>` : ""}
         ${ex.level ? `<span class="ex-tag">${escapeHtml(ex.level)}</span>` : ""}
       </div>
+      ${statsHtml}
+      ${actionHtml}
       ${hasImgs ? `
         <div class="ex-demo">
           <img class="ex-demo-img on" id="exDemoA" src="${ex.images[0]}" alt="${escapeHtml(ex.name)}, position 1" loading="lazy">
@@ -1541,6 +1726,18 @@ export async function mountApp(root, user) {
       ${instrHtml ? `<ol class="ex-instructions">${instrHtml}</ol>` : '<p class="muted">No step-by-step instructions for this one yet.</p>'}
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
+    const addBtn = document.getElementById("exDetailAdd");
+    if (addBtn) addBtn.addEventListener("click", () => {
+      state.active.exercises.push({ exerciseId: ex.id, sets: [{ kg: null, reps: null, done: false }] });
+      saveActiveDraft();
+      closeSheet();
+      setTab("train");
+      toast(`${ex.name} added`);
+    });
+    const startBtn = document.getElementById("exDetailStart");
+    if (startBtn) startBtn.addEventListener("click", async () => {
+      if (await startWorkout(null, false, ex.id)) { closeSheet(); setTab("train"); }
+    });
     if (hasImgs) {
       const a = document.getElementById("exDemoA");
       const b = document.getElementById("exDemoB");
@@ -1592,6 +1789,7 @@ export async function mountApp(root, user) {
     refreshTopbar,
     setUnit, saveRestDuration,
     isPinnedTemplate, isHiddenBuiltin, togglePinTemplate, hideBuiltinTemplate, restoreBuiltinTemplates,
+    replaceBuiltinWithCopy, targetWeight, lastSetsFor,
     openPrivacy: () => openPrivacySheet({ openSheet, closeSheet }),
     openProfile: () => openProfileSheet(ctx),
     confirm: confirmDialog,

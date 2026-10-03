@@ -26,7 +26,9 @@ export function drawChart(container, points, metric, unit) {
     const v = minV + (range * t) / ticks;
     const yy = y(v);
     gridHtml += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
-    labelHtml += `<text x="${padL - 8}" y="${yy + 3}" text-anchor="end" font-size="9.5" font-family="IBM Plex Mono, monospace" fill="var(--ink-faint)">${Math.round(v)}</text>`;
+    // Small ranges (e.g. 55–60) need a decimal or the rounded labels repeat/skip.
+    const lbl = range < 10 ? fmtNum(v) : Math.round(v);
+    labelHtml += `<text x="${padL - 8}" y="${yy + 3}" text-anchor="end" font-size="9.5" font-family="IBM Plex Mono, monospace" fill="var(--ink-faint)">${lbl}</text>`;
   }
 
   const path = points
@@ -91,4 +93,8 @@ export function drawChart(container, points, metric, unit) {
     );
   });
   container.addEventListener("mouseleave", hideTip);
+  // Touch screens never fire mouseleave: tapping anywhere off a point hides it.
+  container.addEventListener("touchstart", (e) => {
+    if (!(e.target.classList && e.target.classList.contains("pt"))) hideTip();
+  }, { passive: true });
 }

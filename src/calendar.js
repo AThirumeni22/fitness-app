@@ -107,7 +107,11 @@ export async function renderCalendar(ctx) {
     document.getElementById("nextMonthBtn").addEventListener("click", () => { viewMonth = new Date(year, month + 1, 1); renderCalendar(ctx); });
     el.querySelectorAll(".cal-cell[data-key]").forEach((b) => {
       const key = b.getAttribute("data-key");
-      b.addEventListener("click", () => openDaySheet(ctx, key, workoutsByDay[key] || [], postsByDay[key] || [], nameById));
+      b.addEventListener("click", () => openDaySheet(ctx, key, workoutsByDay[key] || [], postsByDay[key] || [], nameById, (post) => {
+        // New photo/video: show its camera dot on the grid straight away.
+        (postsByDay[key] = postsByDay[key] || []).unshift(post);
+        draw();
+      }));
     });
     bindPlans();
   }
@@ -493,7 +497,10 @@ function openLightbox(ctx, items, startIndex) {
   draw();
 }
 
-function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
+// Supabase Storage's default per-file limit on the free plan.
+const MAX_UPLOAD_MB = 50;
+
+function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById, onPosted) {
   const { openSheet, closeSheet, toast, escapeHtml } = ctx;
   const unit = ctx.state.unit;
 
@@ -511,7 +518,8 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
     const cats = catsFor(w);
     const exRows = w.exercises.map((e) => {
       const top = e.sets.reduce((b, st) => (!b || st.kg > b.kg ? st : b), null);
-      return `<li><span class="dw-ex">${escapeHtml(e.name)}</span><span class="dw-sets">${e.sets.length} × ${top ? `${ctx.fmtNum(ctx.fromKg(top.kg, unit))} ${unit}` : "—"}</span></li>`;
+      const topStr = !top ? "—" : top.kg ? `${ctx.fmtNum(ctx.fromKg(top.kg, unit))} ${unit}` : "bodyweight";
+      return `<li><span class="dw-ex">${escapeHtml(e.name)}</span><span class="dw-sets">${e.sets.length} × ${topStr}</span></li>`;
     }).join("");
     return `
       <article class="dw-card${w.userId === ctx.user.id ? " mine" : ""}">
@@ -562,7 +570,12 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
     document.getElementById("addMediaBtn").addEventListener("click", () => document.getElementById("dayMediaInput").click());
     document.getElementById("dayMediaInput").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
+      e.target.value = ""; // lets the same file be picked again after an error
       if (!file) return;
+      if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+        toast(`That file is ${Math.round(file.size / 1024 / 1024)} MB — the limit is ${MAX_UPLOAD_MB} MB. Try a shorter video.`);
+        return;
+      }
       const btn = document.getElementById("addMediaBtn");
       btn.disabled = true; btn.textContent = "Uploading…";
       try {
@@ -570,6 +583,7 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById) {
         const post = await ctx.db.addDayPost(ctx.user.id, dateKey, url, type, "");
         const next = [post, ...posts];
         draw(next);
+        if (onPosted) onPosted(post);
         toast("Added");
       } catch (err) {
         toast("Couldn't upload: " + (err.message || String(err)));

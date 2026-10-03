@@ -106,40 +106,52 @@ export async function renderFriends(ctx) {
       ${data.accepted.length ? `<div class="stack-sm">${friendsHtml}</div>` : friendsHtml}
       ${feedHtml}
       <div class="section-label">Add a friend</div>
-      <div class="card">
+      <form class="card" id="addFriendForm" novalidate>
         <p class="muted">They need an Obonto account already — add them by the email they signed up with.</p>
         <div class="field"><label for="friendEmailInput" class="sr-only">Friend's email</label><input type="email" id="friendEmailInput" placeholder="their.email@example.com" autocomplete="off" autocapitalize="off" inputmode="email" enterkeyhint="send"></div>
-        <button class="btn btn-primary btn-block" id="sendReqBtn">Send request</button>
+        <button type="submit" class="btn btn-primary btn-block" id="sendReqBtn">Send request</button>
         <p class="muted" id="addFriendMsg" hidden></p>
-      </div>
+      </form>
       ${outgoingHtml ? `<div class="section-label">Sent</div><div class="stack-sm">${outgoingHtml}</div>` : ""}
     `;
 
-    document.getElementById("sendReqBtn").addEventListener("click", async () => {
+    // A form, so the keyboard's Send/Enter key submits too.
+    document.getElementById("addFriendForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
       const input = document.getElementById("friendEmailInput");
       const msg = document.getElementById("addFriendMsg");
+      const btn = document.getElementById("sendReqBtn");
       const email = input.value.trim();
-      if (!email) return;
+      if (btn.disabled) return;
+      if (!email) { msg.hidden = false; msg.textContent = "Type your friend's email first."; input.focus(); return; }
       msg.hidden = false;
       msg.textContent = "Searching…";
+      btn.disabled = true;
       try {
         const found = await ctx.db.findUserByEmail(email);
-        if (!found) { msg.textContent = "No Obonto account with that email."; return; }
+        if (!found) { msg.textContent = "No Obonto account with that email — check the spelling, or ask them to sign up first."; return; }
         if (found.id === ctx.user.id) { msg.textContent = "That's your own account."; return; }
-        const already = [...data.accepted, ...data.incoming, ...data.outgoing].find((r) => r.otherId === found.id);
-        if (already) { msg.textContent = "You've already got a request with them."; return; }
+        if (data.accepted.some((r) => r.otherId === found.id)) { msg.textContent = "You're already friends."; return; }
+        if (data.incoming.some((r) => r.otherId === found.id)) { msg.textContent = "They've already sent you a request — accept it above."; return; }
+        if (data.outgoing.some((r) => r.otherId === found.id)) { msg.textContent = "You've already sent them a request — waiting for them to accept."; return; }
         await ctx.db.sendFriendRequest(ctx.user.id, found.id);
         toast("Friend request sent");
         input.value = "";
         renderFriends(ctx);
       } catch (err) {
-        msg.textContent = "Couldn't send that: " + (err.message || String(err));
+        msg.textContent = /duplicate|unique/i.test(err.message || "")
+          ? "There's already a request between you two — open the Friends tab again to see it."
+          : "Couldn't send that: " + (err.message || String(err));
+      } finally {
+        btn.disabled = false;
       }
     });
 
     el.querySelectorAll(".accept-btn").forEach((b) => b.addEventListener("click", async () => {
+      if (b.disabled) return;
+      b.disabled = true; b.textContent = "Accepting…";
       try { await ctx.db.acceptFriendRequest(b.getAttribute("data-id")); toast("You're friends now"); renderFriends(ctx); }
-      catch (e) { toast("Couldn't accept that request"); }
+      catch (e) { toast("Couldn't accept that request"); b.disabled = false; b.textContent = "Accept"; }
     }));
     el.querySelectorAll(".decline-btn, .cancel-btn, .remove-btn").forEach((b) => b.addEventListener("click", async () => {
       const id = b.getAttribute("data-id");
@@ -155,12 +167,14 @@ export async function renderFriends(ctx) {
         });
         if (!ok) return;
       }
+      if (b.disabled) return;
+      b.disabled = true;
       try {
         await ctx.db.removeFriendship(id);
         if (b.classList.contains("remove-btn")) toast("Friend removed");
         renderFriends(ctx);
       }
-      catch (e) { toast("Couldn't update that"); }
+      catch (e) { toast("Couldn't update that"); b.disabled = false; }
     }));
   }
 
