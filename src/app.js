@@ -1191,15 +1191,19 @@ export async function mountApp(root, user) {
       if (over && !a.rest.beeped) { a.rest.beeped = true; saveActiveDraft(); beep(); }
       const txt = over ? `+${fmtClock(-remain)}` : fmtClock(Math.ceil(remain));
       if (timeEl && timeEl.textContent !== txt) timeEl.textContent = txt;
+      const done = over ? 1 : Math.max(0, Math.min(1, 1 - remain / a.rest.duration));
       if (bar) {
         bar.classList.toggle("over", over);
-        const fill = bar.querySelector(".wb-progress > i");
-        if (fill) fill.style.transform = `scaleX(${over ? 1 : Math.max(0, Math.min(1, 1 - remain / a.rest.duration))})`;
+        // Ring empties as the rest runs down.
+        const arc = bar.querySelector(".wb-ring .arc");
+        if (arc) arc.setAttribute("stroke-dashoffset", (done * 100).toFixed(1));
         const tag = bar.querySelector(".wb-tag");
         if (tag) tag.textContent = over ? "Rest over" : "Rest";
       }
       const chip = document.querySelector(".xs-restchip.running");
       if (chip && chip.textContent !== txt) chip.textContent = txt;
+      const line = document.querySelector(".xs-restline.running .xs-resttrack > i");
+      if (line) line.style.transform = `scaleX(${done.toFixed(3)})`;
     }
   }
 
@@ -1227,14 +1231,19 @@ export async function mountApp(root, user) {
       mode = "done"; label = "All sets done"; sub = "Tap ✓ to finish"; big = "check"; bigLabel = "Finish workout";
     }
     bar.className = `wbar ${mode}`;
+    const ringOffset = mode === "rest" ? 0 : mode === "done" ? 0 : 100;
+    const bigText = mode === "set" ? "Done" : mode === "done" || big === "check" ? "Finish" : "Start";
     bar.innerHTML = `
-      ${mode === "rest" ? '<div class="wb-progress" aria-hidden="true"><i></i></div>' : ""}
+      <span class="wb-ring" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><circle class="trk" cx="24" cy="24" r="20"/><circle class="arc" cx="24" cy="24" r="20" pathLength="100" stroke-dasharray="100" stroke-dashoffset="${ringOffset}" transform="rotate(-90 24 24)"/></svg>
+        <span class="wb-ring-ic">${mode === "rest" ? ICONS.timer : mode === "set" ? '<i class="wb-dot"></i>' : mode === "done" ? ICONS.check : ICONS.play}</span>
+      </span>
       <button type="button" class="wb-info" aria-label="Go to your workout">
-        <span class="wb-label">${mode === "rest" ? '<span class="wb-tag">Rest</span>' : mode === "set" ? '<span class="wb-dot" aria-hidden="true"></span>' : ""}${label}</span>
+        <span class="wb-label">${mode === "rest" ? '<span class="wb-tag">Rest</span>' : ""}${label}</span>
         <span class="wb-row"><span class="wb-time num">${mode === "idle" || mode === "done" ? "" : "00:00"}</span><span class="wb-sub">${sub}</span></span>
       </button>
       ${mode === "rest" ? '<div class="wb-adj"><button type="button" data-adj="-15" aria-label="15 seconds less rest">−15</button><button type="button" data-adj="15" aria-label="15 seconds more rest">+15</button></div>' : ""}
-      <button type="button" class="wb-big ${big}" aria-label="${bigLabel}">${big === "play" ? ICONS.play : ICONS.check}</button>`;
+      <button type="button" class="wb-big ${big}" aria-label="${bigLabel}">${big === "play" ? ICONS.play : ICONS.check}<span>${bigText}</span></button>`;
     bar.hidden = false;
     document.body.classList.add("has-wbar");
     bar.querySelector(".wb-info").addEventListener("click", () => { if (currentTab !== "train") setTab("train"); else if (a.current || nx) scrollToSet((a.current || nx).exi, (a.current || nx).si); });

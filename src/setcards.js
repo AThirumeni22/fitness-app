@@ -6,6 +6,7 @@
 import { fmtNum, fromKg, toKg, roundDisp, escapeHtml, fmtShort, fmtClock } from "./utils.js";
 import { drawChart } from "./chart.js";
 import { figureSvg } from "./figures.js";
+import { GROUP_COLORS } from "./musclechart.js";
 
 /* ================= template data ================= */
 
@@ -82,50 +83,65 @@ export function thumbHtml(ex) {
 //   placeholders  [{ w, reps }] per set — faint hints (last time)
 //   current  index of the set in progress (log mode), or -1
 //   restSi   index of the set whose rest is counting down, or -1
-//   restText text for that running chip
+//
+// Look: each set is one connected bar — number | weight × reps | action —
+// with a status stripe on its left; rest is a thin line under the set that
+// fills while it counts down. The card's left edge carries the muscle
+// group's colour (same as the Muscles hit chart).
 export function exerciseCardHtml(o) {
   const { mode, index, ex, sets, unit } = o;
   const isLog = mode === "log";
   const name = ex ? ex.name : "Exercise";
-  const sub = [equipLabel(ex), `${sets.length} set${sets.length === 1 ? "" : "s"}`].filter(Boolean).join(" • ");
+  const cat = (ex && ex.cat) || "";
+  const color = GROUP_COLORS[cat] || "var(--accent-2)";
+  const sub = [equipLabel(ex), `${sets.length} set${sets.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
   const rows = sets.map((s, si) => {
     const ph = (o.placeholders && o.placeholders[si]) || {};
     const isCur = isLog && o.current === si;
     const state = s.done ? "done" : isCur ? "check" : "play";
     const act = isLog
       ? `<button type="button" class="xs-act ${state}" data-si="${si}" aria-label="${s.done ? `Set ${si + 1} done — tap to undo` : isCur ? `Finish set ${si + 1}` : `Start set ${si + 1}`}">${state === "play" ? IC.play : IC.check}</button>`
-      : `<button type="button" class="xs-restbtn" data-si="${si}" aria-label="Rest after set ${si + 1}: ${restLabel(s.rest)}">${restLabel(s.rest)}</button>`;
-    const restChip = isLog ? `
-      <div class="xs-restline"><button type="button" class="xs-restchip${o.restSi === si ? " running" : ""}" data-si="${si}" aria-label="Rest after set ${si + 1}">${o.restSi === si && o.restText ? o.restText : restLabel(s.rest)}</button></div>` : "";
+      : `<button type="button" class="xs-restbtn" data-si="${si}" aria-label="Rest after set ${si + 1}: ${restLabel(s.rest)}">${IC.timer}<span>${restLabel(s.rest)}</span></button>`;
+    const running = isLog && o.restSi === si;
+    const restLine = isLog ? `
+      <div class="xs-restline${running ? " running" : ""}">
+        <span class="xs-resttrack" aria-hidden="true"><i></i></span>
+        <button type="button" class="xs-restchip${running ? " running" : ""}" data-si="${si}" aria-label="Rest after set ${si + 1}">${restLabel(s.rest)}</button>
+      </div>` : "";
     return `
-      <div class="xs-row${s.done ? " done" : ""}${isCur ? " current" : ""}" data-si="${si}">
+      <div class="xs-row ${state}${isCur ? " current" : ""}" data-si="${si}">
         <button type="button" class="xs-num" data-si="${si}" aria-label="Set ${si + 1} — tap to delete">${si + 1}</button>
-        <label class="xs-pill"><input type="text" inputmode="decimal" autocomplete="off" class="xs-kg" data-si="${si}" value="${escapeHtml(s.w ?? "")}" placeholder="${escapeHtml(ph.w ?? "–")}" aria-label="Set ${si + 1} weight (${unit})"><span${!s.w && ph.w === "BW" ? ' class="xs-unit-bw"' : ""}>${unit}</span></label>
-        <label class="xs-pill"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="xs-reps" data-si="${si}" value="${s.reps ?? ""}" placeholder="${escapeHtml(ph.reps ?? "–")}" aria-label="Set ${si + 1} reps"><span>reps</span></label>
+        <label class="xs-field"><input type="text" inputmode="decimal" autocomplete="off" class="xs-kg" data-si="${si}" value="${escapeHtml(s.w ?? "")}" placeholder="${escapeHtml(ph.w ?? "–")}" aria-label="Set ${si + 1} weight (${unit})"><span${!s.w && ph.w === "BW" ? ' class="xs-unit-bw"' : ""}>${unit}</span></label>
+        <span class="xs-x" aria-hidden="true">×</span>
+        <label class="xs-field"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="xs-reps" data-si="${si}" value="${s.reps ?? ""}" placeholder="${escapeHtml(ph.reps ?? "–")}" aria-label="Set ${si + 1} reps"><span>reps</span></label>
         ${act}
-      </div>${restChip}`;
+      </div>${restLine}`;
   }).join("");
 
   return `
-    <div class="xcard${o.linkedPrev ? " linked-prev" : ""}${o.linkedNext ? " linked-next" : ""}" data-exi="${index}">
+    <div class="xcard${o.linkedPrev ? " linked-prev" : ""}${o.linkedNext ? " linked-next" : ""}" data-exi="${index}" style="--mc:${color}">
       <div class="xc-head">
         ${thumbHtml(ex)}
-        <div class="xc-title"><h3>${escapeHtml(name)}</h3><span>${escapeHtml(sub)}</span></div>
-        <button type="button" class="xc-icon xc-rest" aria-label="Rest time for every set of ${escapeHtml(name)}">${IC.timer}</button>
-        <button type="button" class="xc-icon ghost xc-menu" aria-label="More options for ${escapeHtml(name)}">${IC.dots}</button>
+        <div class="xc-title">
+          ${cat ? `<span class="xc-cat">${escapeHtml(cat)}</span>` : ""}
+          <h3>${escapeHtml(name)}</h3>
+          <span class="xc-sub">${escapeHtml(sub)}</span>
+        </div>
+        <div class="xc-tools">
+          <button type="button" class="xc-icon xc-prog" aria-label="Progression for ${escapeHtml(name)}">${IC.chart}</button>
+          <button type="button" class="xc-icon xc-rest" aria-label="Rest time for every set of ${escapeHtml(name)}">${IC.timer}</button>
+          <button type="button" class="xc-icon xc-menu" aria-label="More options for ${escapeHtml(name)}">${IC.dots}</button>
+        </div>
       </div>
-      ${!isLog && sets.length ? `<div class="xs-cols" aria-hidden="true"><span>Set</span><span>${unit}</span><span>Reps</span><span>Rest</span></div>` : ""}
-      <div class="xc-sets">${rows || '<p class="faint xc-empty">No sets — add one below.</p>'}</div>
-      <div class="xc-foot">
-        <button type="button" class="xc-prog">${IC.chart}Progression</button>
-        <button type="button" class="xc-add">${IC.plus}Add Set</button>
-      </div>
+      <div class="xc-sets">${rows || '<p class="faint xc-empty">No sets yet.</p>'}</div>
+      <button type="button" class="xc-add">${IC.plus}Add set</button>
     </div>`;
 }
 
-// The chain between card i and i+1 (supersets).
+// Between card i and i+1: link the two as a superset (alternate their sets,
+// rest after each round).
 export function chainHtml(i, linked) {
-  return `<div class="xchain${linked ? " on" : ""}"><button type="button" class="xchain-btn" data-exi="${i}" aria-pressed="${linked}" aria-label="${linked ? "Unlink superset" : "Make a superset with the next exercise"}">${IC.link}</button></div>`;
+  return `<div class="xchain${linked ? " on" : ""}"><button type="button" class="xchain-btn" data-exi="${i}" aria-pressed="${linked}" aria-label="${linked ? "Unlink superset" : "Make a superset with the next exercise"}">${IC.link}<span>${linked ? "Superset" : "Link as superset"}</span></button></div>`;
 }
 
 /* ================= dialogs ================= */

@@ -1,6 +1,6 @@
 // Template editor: name, exercises in order, and every set's own target
 // weight / reps / rest — the same exercise cards the workout screen uses.
-// Supersets are made with the chain between two cards. Pass template = null
+// Supersets are made with the "Link as superset" button between two cards. Pass template = null
 // to create a brand new template.
 
 import { templateSets, buildTarget, exerciseCardHtml, chainHtml, pickRest, exerciseMenu, openProgression } from "./setcards.js";
@@ -71,7 +71,7 @@ export function openTemplateEditor(ctx, template) {
       <div class="sheet-title"><h3>${isNew ? "New Template" : "Edit Template"}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div id="tplEd" class="tpl-ed">
         <div class="field"><label for="tplNameInput">Name</label><input type="text" id="tplNameInput" value="${escapeHtml(name)}" placeholder="e.g. Shoulders + Abs" maxlength="60" autocomplete="off"></div>
-        <p class="faint">${items.length} exercise${items.length === 1 ? "" : "s"}, ${nSets} set${nSets === 1 ? "" : "s"}${items.length > 1 ? " · tap the chain between two exercises to make a superset" : ""}</p>
+        <p class="faint">${items.length} exercise${items.length === 1 ? "" : "s"}, ${nSets} set${nSets === 1 ? "" : "s"}${items.length > 1 ? " · tap “Link as superset” between two exercises to pair them" : ""}</p>
         ${isBuiltIn ? '<p class="muted">This is a built-in template — saving creates your own editable copy.</p>' : ""}
         ${items.length ? `<div class="xlist">${cards}</div>` : '<div class="card"><p class="muted">No exercises yet — add some below. Each one gets its own sets, reps, weights and rest.</p></div>'}
         <div class="ed-bar">

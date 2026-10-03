@@ -222,11 +222,11 @@ check the phone's notification settings for Obonto, and look at
   Progression for a chart of your best sets. Finishing with sets you
   filled in but didn't tick asks whether to log them. Sets with reps but
   no weight count as bodyweight ("BW").
-- **Supersets** — tap the chain between two exercises to link them: you
+- **Supersets** — tap "Link as superset" between two exercises: you
   go A1 → B1 → rest → A2 → B2…, resting only after each round.
 - **Templates with per-set targets** — the pencil icon on a template opens
   the editor: every set has its own weight, reps and rest, plus the same
-  ⏱, ⋯, chain and Progression tools as the workout screen.
+  ⏱, ⋯, superset and Progression tools as the workout screen.
 - **Exercise picker & details** — "Add exercise" lists your recent
   exercises first. Tapping a library exercise shows your best, how often
   you've done it and your last session, with a button to add it to the
