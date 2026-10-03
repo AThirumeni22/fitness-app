@@ -98,13 +98,12 @@ export async function renderFriends(ctx) {
       ${feed.length ? `<div class="stack-sm">${feed.map(feedCard).join("")}</div>` : '<div class="card"><p class="muted">No workouts from you or your friends in the last three weeks.</p></div>'}
     ` : "";
 
-    // Order: incoming requests (need action) → your friends → their recent
-    // workouts → add a friend → requests you've sent.
+    // Order: incoming requests (need action) → your friends → add a friend →
+    // requests you've sent → their recent workouts.
     el.innerHTML = `
       ${incomingHtml ? `<div class="section-label">Requests</div><div class="stack-sm">${incomingHtml}</div>` : ""}
       <div class="section-label">Friends</div>
       ${data.accepted.length ? `<div class="stack-sm">${friendsHtml}</div>` : friendsHtml}
-      ${feedHtml}
       <div class="section-label">Add a friend</div>
       <form class="card" id="addFriendForm" novalidate>
         <p class="muted">They need an Obonto account already — add them by the email they signed up with.</p>
@@ -113,6 +112,7 @@ export async function renderFriends(ctx) {
         <p class="muted" id="addFriendMsg" hidden></p>
       </form>
       ${outgoingHtml ? `<div class="section-label">Sent</div><div class="stack-sm">${outgoingHtml}</div>` : ""}
+      ${feedHtml}
     `;
 
     // A form, so the keyboard's Send/Enter key submits too.

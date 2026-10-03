@@ -1,5 +1,6 @@
 import { supabase } from "./supabaseClient.js";
-import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary } from "./exercises.js";
+import { DEFAULT_TEMPLATES, CAT_ORDER, fetchExerciseLibrary, fetchLegacyExercises } from "./exercises.js";
+import { figureSvg } from "./figures.js";
 import {
   uid, byId, toKg, fromKg, roundDisp, parseNum, fmtNum,
   fmtDate, fmtShort, fmtDuration, fmtClock, fmtElapsed, escapeHtml
@@ -20,14 +21,15 @@ import { templateSets, buildTarget, exerciseCardHtml, chainHtml, choiceDialog, p
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
 
-  let profile, customExercises, templates, history, library;
+  let profile, customExercises, templates, history, library, legacy;
   try {
-    [profile, customExercises, templates, history, library] = await Promise.all([
+    [profile, customExercises, templates, history, library, legacy] = await Promise.all([
       db.getProfile(user.id),
       db.listCustomExercises(user.id),
       db.listTemplates(user.id),
       db.listWorkouts(user.id),
-      fetchExerciseLibrary()
+      fetchExerciseLibrary(),
+      fetchLegacyExercises()
     ]);
   } catch (err) {
     root.innerHTML = `<div class="boot-loading err"><p>Couldn't load your data: ${escapeHtml(err.message || String(err))}</p><button class="btn btn-secondary" id="retryBtn">Retry</button></div>`;
@@ -48,6 +50,35 @@ export async function mountApp(root, user) {
     if (raw) activeDraft = JSON.parse(raw);
   } catch (e) { activeDraft = null; }
 
+  // Exercises from the old, much larger library are switched to their new
+  // equivalent (e.g. "Barbell Bench Press - Medium Grip" → Barbell Bench
+  // Press) in history, templates and an in-progress workout, so PRs and
+  // progress carry over. Old ones with no equivalent keep their name and
+  // category (hidden from the library, but still shown where they're used).
+  const newId = (id) => legacy.map[id] || id;
+  history.forEach((w) => (w.exercises || []).forEach((ex) => { ex.exerciseId = newId(ex.exerciseId); }));
+  templates = templates.map((t) => {
+    const ids = [], targets = {};
+    t.exerciseIds.forEach((id) => {
+      const n = newId(id);
+      if (ids.includes(n)) return; // two old variants became the same exercise
+      ids.push(n);
+      if (t.targets && t.targets[id]) targets[n] = t.targets[id];
+    });
+    return { ...t, exerciseIds: ids, targets };
+  });
+  if (activeDraft && Array.isArray(activeDraft.exercises)) activeDraft.exercises.forEach((ex) => { ex.exerciseId = newId(ex.exerciseId); });
+  const known = new Set(library.map((e) => e.id).concat(customExercises.map((e) => e.id)));
+  const legacyEntries = [];
+  const keepOld = (id) => {
+    if (known.has(id) || !legacy.names[id]) return;
+    known.add(id);
+    legacyEntries.push({ id, name: legacy.names[id][0], cat: legacy.names[id][1], equipment: "", legacy: true, isCustom: false });
+  };
+  history.forEach((w) => (w.exercises || []).forEach((ex) => keepOld(ex.exerciseId)));
+  templates.forEach((t) => t.exerciseIds.forEach(keepOld));
+  if (activeDraft && Array.isArray(activeDraft.exercises)) activeDraft.exercises.forEach((ex) => keepOld(ex.exerciseId));
+
   const REST_KEY = `trainlog.restDuration.${user.id}`;
   let savedRestDuration = 90;
   try {
@@ -57,7 +88,7 @@ export async function mountApp(root, user) {
 
   const state = {
     unit: profile.unit === "lb" ? "lb" : "kg",
-    exercises: library.concat(customExercises),
+    exercises: library.concat(customExercises, legacyEntries),
     templates: DEFAULT_TEMPLATES.concat(templates),
     history,
     active: activeDraft,
@@ -161,7 +192,8 @@ export async function mountApp(root, user) {
     for (const sess of state.history) {
       for (const ex of sess.exercises) {
         if (out.length >= limit) return out;
-        if (!out.includes(ex.exerciseId) && !exclude.includes(ex.exerciseId) && byId(state.exercises, ex.exerciseId)) out.push(ex.exerciseId);
+        const e = byId(state.exercises, ex.exerciseId);
+        if (e && !e.legacy && !out.includes(ex.exerciseId) && !exclude.includes(ex.exerciseId)) out.push(ex.exerciseId);
       }
     }
     return out;
@@ -186,8 +218,15 @@ export async function mountApp(root, user) {
     } catch (e) {}
   }
 
-  function exName(id) { const e = byId(state.exercises, id); return e ? e.name : "Exercise"; }
-  function exCat(id) { const e = byId(state.exercises, id); return e ? e.cat : ""; }
+  // Also resolves old-library ids (e.g. in a friend's older workouts).
+  function exEntry(id) {
+    const e = byId(state.exercises, id) || (legacy.map[id] && byId(state.exercises, legacy.map[id]));
+    if (e) return e;
+    const old = legacy.names[id];
+    return old ? { id, name: old[0], cat: old[1], legacy: true } : null;
+  }
+  function exName(id) { const e = exEntry(id); return e ? e.name : "Exercise"; }
+  function exCat(id) { const e = exEntry(id); return e ? e.cat : ""; }
 
   // Templates with any hidden built-ins filtered out, pinned ones first
   // (stable otherwise — keeps everyone's existing ordering predictable).
@@ -1080,7 +1119,8 @@ export async function mountApp(root, user) {
         return `<div class="stack"><div class="cat-chip-row">${chips}</div>${recentHtml}<p class="pick-note">Search by name, or pick a category to browse.</p></div>`;
       }
 
-      const pool = activeCat ? state.exercises.filter((e) => e.cat === activeCat) : state.exercises;
+      const lib = state.exercises.filter((e) => !e.legacy);
+      const pool = activeCat ? lib.filter((e) => e.cat === activeCat) : lib;
       const matches = q ? pool.filter((e) => matchesSearch(e, q)) : pool;
       const shown = matches.slice(0, MAX_RESULTS);
       let rowsHtml = shown.map((e) => `<div class="pick-row" data-id="${e.id}"><span>${escapeHtml(e.name)}</span><span class="pick-eq">${escapeHtml(e.equipment || "")}</span></div>`).join("");
@@ -1343,10 +1383,9 @@ export async function mountApp(root, user) {
     { key: "barbell", label: "Barbell" },
     { key: "dumbbell", label: "Dumbbell" },
     { key: "cable", label: "Cable" },
-    { key: "machine", label: "Machine" },
-    { key: "kettlebells", label: "Kettlebell" },
-    { key: "bands", label: "Bands" }
+    { key: "machine", label: "Machine" }
   ];
+  const EQUIP_LABEL = { "body only": "Bodyweight", barbell: "Barbell", dumbbell: "Dumbbell", cable: "Cable", machine: "Machine", kettlebell: "Kettlebell" };
 
   function bestPr(exId) {
     let best = 0;
@@ -1403,16 +1442,17 @@ export async function mountApp(root, user) {
       </div>`;
   }
 
-  // Library groups render their rows only when opened (or while searching):
-  // 875+ rows rebuilt on every keystroke was what made typing lag on phones.
+  // Library groups render their rows (each with a drawing) only when opened
+  // or while searching, so typing in the search box stays quick.
   const LIB_SEARCH_LIMIT = 60;
   function libraryRowsHtml(items) {
     return items.map((e) => {
       const pr = bestPr(e.id);
       return `
         <div class="ex-row" data-id="${e.id}">
+          <span class="ex-fig" aria-hidden="true">${figureSvg(e, { pose: "auto", fit: true })}</span>
           <div class="info"><div class="nm">${escapeHtml(e.name)}</div>
-          <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.equipment || "")}</div></div>
+          <div class="pr">${pr > 0 ? `PR ${fmtNum(fromKg(pr, state.unit))} ${state.unit}` : escapeHtml(e.isCustom ? "Custom" : EQUIP_LABEL[e.equipment] || "")}</div></div>
           ${e.isCustom
             ? `<button class="icon-btn sm del-ex" data-id="${e.id}" title="Delete" aria-label="Delete exercise">${ICON.x}</button>`
             : ICON.chev}
@@ -1422,7 +1462,7 @@ export async function mountApp(root, user) {
 
   function libraryItemsFor(cat) {
     const q = exSearch.trim().toLowerCase();
-    let items = state.exercises.filter((e) => e.cat === cat);
+    let items = state.exercises.filter((e) => e.cat === cat && !e.legacy);
     if (exEquipment) items = items.filter((e) => (e.equipment || "other") === exEquipment);
     if (q) items = items.filter((e) => matchesSearch(e, q));
     return items;
@@ -1463,7 +1503,7 @@ export async function mountApp(root, user) {
       <div class="page-head"><h2>Templates</h2><button class="btn btn-secondary btn-sm" id="newTplBtn">+ New</button></div>
       ${tplHtml}
       <div class="page-head"><h2>Library</h2><button class="btn btn-secondary btn-sm" id="newExBtn">+ Add custom</button></div>
-      <input type="search" class="search-input" id="exSearchInput" placeholder="Search 875+ exercises…" value="${escapeHtml(exSearch)}" autocomplete="off" enterkeyhint="search">
+      <input type="search" class="search-input" id="exSearchInput" placeholder="Search exercises…" value="${escapeHtml(exSearch)}" autocomplete="off" enterkeyhint="search">
       <div class="cat-chip-row" id="eqChips">${eqChipsHtml}</div>
       <div class="lib-groups" id="exLibrary"></div>
     `;
@@ -1660,7 +1700,6 @@ export async function mountApp(root, user) {
 
   function openExerciseDetail(ex) {
     if (!ex) return;
-    const hasImgs = Array.isArray(ex.images) && ex.images.length >= 2;
     const instrHtml = (ex.instructions || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
 
     // Your own numbers for this exercise.
@@ -1690,16 +1729,11 @@ export async function mountApp(root, user) {
       <div class="sheet-title"><h3>${escapeHtml(ex.name)}</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="ex-tags">
         <span class="ex-tag">${escapeHtml(ex.cat)}</span>
-        ${ex.equipment ? `<span class="ex-tag">${escapeHtml(ex.equipment)}</span>` : ""}
-        ${ex.level ? `<span class="ex-tag">${escapeHtml(ex.level)}</span>` : ""}
+        ${ex.isCustom ? '<span class="ex-tag">Custom</span>' : EQUIP_LABEL[ex.equipment] ? `<span class="ex-tag">${EQUIP_LABEL[ex.equipment]}</span>` : ""}
       </div>
+      ${ex.fig ? `<div class="ex-demo">${figureSvg(ex, { animate: true })}</div>` : ""}
       ${statsHtml}
       ${actionHtml}
-      ${hasImgs ? `
-        <div class="ex-demo">
-          <img class="ex-demo-img on" id="exDemoA" src="${ex.images[0]}" alt="${escapeHtml(ex.name)}, position 1" loading="lazy">
-          <img class="ex-demo-img" id="exDemoB" src="${ex.images[1]}" alt="${escapeHtml(ex.name)}, position 2" loading="lazy">
-        </div>` : ""}
       ${instrHtml ? `<ol class="ex-instructions">${instrHtml}</ol>` : '<p class="muted">No step-by-step instructions for this one yet.</p>'}
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
@@ -1715,18 +1749,6 @@ export async function mountApp(root, user) {
     if (startBtn) startBtn.addEventListener("click", async () => {
       if (await startWorkout(null, ex.id)) { closeSheet(); setTab("train"); }
     });
-    if (hasImgs) {
-      const a = document.getElementById("exDemoA");
-      const b = document.getElementById("exDemoB");
-      a.addEventListener("error", () => { a.style.display = "none"; });
-      b.addEventListener("error", () => { b.style.display = "none"; });
-      let showingA = true;
-      activeDetailInterval = setInterval(() => {
-        showingA = !showingA;
-        a.classList.toggle("on", showingA);
-        b.classList.toggle("on", !showingA);
-      }, 1100);
-    }
   }
 
   function openCustomExerciseForm() {

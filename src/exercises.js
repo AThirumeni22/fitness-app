@@ -1,20 +1,30 @@
-// The exercise library is large (800+ entries with demonstration images), so
-// it isn't bundled into the JS -- it ships as a static JSON file
-// (public/exercises-data.json, sourced from the free-exercise-db open
-// dataset) and is fetched once at startup, in parallel with the user's
-// Supabase data. See README.md for attribution/licensing notes.
+// The built-in exercise library (~100 common lifts with plain names and
+// drawn animations) lives in library.js and ships with the app.
+//
+// Older versions used a much larger library with different ids. Templates,
+// history and in-progress workouts can still contain those ids, so
+// public/exercises-legacy.json maps each old id to its new exercise
+// ({ map: { oldId: newId } }) or, if there's no equivalent, keeps its old
+// name and category ({ names: { oldId: [name, cat] } }).
+
+import { LIBRARY } from "./library.js";
 
 export const CAT_ORDER = ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core"];
 
-let cached = null;
-
 export async function fetchExerciseLibrary() {
-  if (cached) return cached;
-  const res = await fetch("/exercises-data.json");
-  if (!res.ok) throw new Error("Couldn't load the exercise library (" + res.status + ")");
-  const data = await res.json();
-  cached = data.map((e) => ({ ...e, isCustom: false }));
-  return cached;
+  return LIBRARY.map((e) => ({ ...e }));
+}
+
+let legacy = null;
+export async function fetchLegacyExercises() {
+  if (legacy) return legacy;
+  try {
+    const res = await fetch("/exercises-legacy.json");
+    legacy = res.ok ? await res.json() : { map: {}, names: {} };
+  } catch (e) {
+    legacy = { map: {}, names: {} };
+  }
+  return legacy;
 }
 
 export const DEFAULT_TEMPLATES = [
@@ -22,11 +32,11 @@ export const DEFAULT_TEMPLATES = [
     id: "default-push-day",
     name: "Push Day",
     exerciseIds: [
-      "Barbell_Bench_Press_-_Medium_Grip",
-      "Standing_Military_Press",
-      "Barbell_Incline_Bench_Press_-_Medium_Grip",
-      "Cable_Incline_Triceps_Extension",
-      "Side_Lateral_Raise"
+      "barbell-bench-press",
+      "barbell-overhead-press",
+      "barbell-incline-press",
+      "cable-overhead-triceps-extension",
+      "dumbbell-lateral-raise"
     ],
     targets: {},
     isCustom: false
@@ -35,11 +45,11 @@ export const DEFAULT_TEMPLATES = [
     id: "default-pull-day",
     name: "Pull Day",
     exerciseIds: [
-      "Pullups",
-      "Bent_Over_Barbell_Row",
-      "Full_Range-Of-Motion_Lat_Pulldown",
-      "Barbell_Curl",
-      "Seated_Cable_Rows"
+      "pull-up",
+      "barbell-row",
+      "cable-lat-pulldown",
+      "barbell-curl",
+      "cable-seated-row"
     ],
     targets: {},
     isCustom: false
@@ -48,11 +58,11 @@ export const DEFAULT_TEMPLATES = [
     id: "default-leg-day",
     name: "Leg Day",
     exerciseIds: [
-      "Barbell_Squat",
-      "Romanian_Deadlift",
-      "Leg_Press",
-      "Seated_Calf_Raise",
-      "Dumbbell_Lunges"
+      "barbell-squat",
+      "barbell-romanian-deadlift",
+      "machine-leg-press",
+      "machine-seated-calf-raise",
+      "dumbbell-lunge"
     ],
     targets: {},
     isCustom: false

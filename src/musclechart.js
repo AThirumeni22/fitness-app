@@ -1,11 +1,12 @@
 // "Total volume by muscle group" radial chart for the home screen.
 //
-// Six wedges (one per muscle group) × four concentric rings. How many rings
-// a wedge fills = how much volume (sets × reps × weight) that group got,
-// relative to your most-trained group — so it's a quick read of balance,
-// not an absolute scale. Each group keeps one fixed color (the same one its
-// tag uses elsewhere in the app), and every wedge is direct-labeled with its
-// name and number, so nothing depends on telling colors apart.
+// Six smooth wedges (one per muscle group) around a small centre. Each
+// wedge grows outward from the centre on a faint full-size track; its area
+// is proportional to that group's volume (sets × reps × weight) relative to
+// your most-trained group — a quick read of balance, not an absolute scale.
+// Each group keeps one fixed color (the same one its tag uses elsewhere in
+// the app), and every wedge is direct-labeled with its name and number, so
+// nothing depends on telling colors apart.
 
 // Clockwise from the top, matching the reference layout.
 const GROUPS = ["Chest", "Back", "Legs", "Shoulders", "Core", "Arms"];
@@ -22,9 +23,8 @@ export const GROUP_COLORS = {
   Arms: "#008300"
 };
 
-const RINGS = 4;
-const R0 = 26, RING_W = 17, RING_GAP = 4;
-const HALF_SPAN = 26.5; // degrees each side of the wedge centre (gap = 7° between wedges)
+const R_IN = 30, R_OUT = 104;
+const HALF_SPAN = 29.2; // degrees each side of the wedge centre (a hairline between wedges)
 
 function polar(r, deg) {
   const a = (deg * Math.PI) / 180;
@@ -66,25 +66,28 @@ export function muscleChartHtml({ history, exCat, fromKg, unit, days, escapeHtml
   const max = Math.max(0, ...GROUPS.map((g) => vol[g]));
   const total = GROUPS.reduce((n, g) => n + vol[g], 0);
 
+  const defs = GROUPS.map((g) => `
+    <radialGradient id="mvg-${g}" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="${R_OUT}">
+      <stop offset="${(R_IN / R_OUT).toFixed(2)}" stop-color="${GROUP_COLORS[g]}" stop-opacity=".45"/>
+      <stop offset="1" stop-color="${GROUP_COLORS[g]}" stop-opacity="1"/>
+    </radialGradient>`).join("");
+
   const wedges = GROUPS.map((g, k) => {
     const centre = -90 + k * 60;
     const a1 = centre - HALF_SPAN, a2 = centre + HALF_SPAN;
-    const level = max > 0 && vol[g] > 0 ? Math.max(1, Math.ceil((vol[g] / max) * RINGS)) : 0;
-    const color = GROUP_COLORS[g];
-    const rings = [];
-    for (let i = 0; i < RINGS; i++) {
-      const r1 = R0 + i * (RING_W + RING_GAP), r2 = r1 + RING_W;
-      if (i < level) {
-        const isTop = i === level - 1;
-        const op = isTop ? 1 : 0.28 + 0.5 * ((i + 1) / level);
-        rings.push(`<path d="${arcPath(r1, r2, a1, a2)}" fill="${color}" fill-opacity="${op.toFixed(2)}"${isTop ? ` class="mv-top" style="--mv:${color}"` : ""}/>`);
-      } else {
-        rings.push(`<path d="${arcPath(r1, r2, a1, a2)}" class="mv-empty"/>`);
-      }
-    }
-    return `<g class="mv-wedge" tabindex="0" role="img" aria-label="${g}: ${compact(vol[g])} ${unit}, ${level} of ${RINGS} rings">
-      <title>${g}: ${compact(vol[g])} ${unit}</title>${rings.join("")}</g>`;
+    const share = max > 0 ? vol[g] / max : 0;
+    // Area-proportional, with a small minimum so a trained group never vanishes.
+    const r = share > 0 ? Math.sqrt(R_IN * R_IN + share * (R_OUT * R_OUT - R_IN * R_IN)) : 0;
+    const fill = r ? `<path d="${arcPath(R_IN, Math.max(r, R_IN + 4), a1, a2)}" fill="url(#mvg-${g})" class="mv-fill"/><path d="${arcPath(Math.max(r, R_IN + 4) - 2.5, Math.max(r, R_IN + 4), a1, a2)}" fill="${GROUP_COLORS[g]}"/>` : "";
+    const pct = Math.round(share * 100);
+    return `<g class="mv-wedge" tabindex="0" role="img" aria-label="${g}: ${compact(vol[g])} ${unit}${max > 0 ? `, ${pct}% of your top group` : ""}">
+      <title>${g}: ${compact(vol[g])} ${unit}</title><path d="${arcPath(R_IN, R_OUT, a1, a2)}" class="mv-track"/>${fill}</g>`;
   }).join("");
+
+  const centreHtml = `
+    <circle r="${R_IN - 3}" class="mv-hole"/>
+    <text y="-1" class="mv-total">${total > 0 ? compact(total) : "0"}</text>
+    <text y="11" class="mv-total-unit">${unit}</text>`;
 
   const LABEL_R = 138;
   const labels = GROUPS.map((g, k) => {
@@ -114,7 +117,9 @@ export function muscleChartHtml({ history, exCat, fromKg, unit, days, escapeHtml
         </div>
       </div>
       <svg class="mv-svg" viewBox="-178 -162 356 324" aria-hidden="false" role="group" aria-label="Volume by muscle group">
+        <defs>${defs}</defs>
         ${wedges}
+        ${centreHtml}
         ${labels}
       </svg>
       <table class="sr-only"><caption>Volume by muscle group${days ? ", last 30 days" : ", all time"}</caption><tbody>${tableRows}</tbody></table>

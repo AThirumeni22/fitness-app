@@ -159,7 +159,7 @@ check the phone's notification settings for Obonto, and look at
 - Every table (`profiles`, `custom_exercises`, `templates`, `workouts`) has
   a `user_id` column and a Row Level Security policy that only allows a
   signed-in user to touch rows where `user_id` matches their own id.
-- The built-in exercise library (875+ exercises, `public/exercises-data.json`)
+- The built-in exercise library (~100 exercises, `src/library.js`)
   and starter templates (`src/exercises.js`) aren't stored in the database at
   all — they ship with the app for everyone. Only exercises/templates someone
   adds themselves, and their finished workouts, are saved to their account.
@@ -244,7 +244,7 @@ One current limitation worth knowing: a friend's own custom exercises
 (ones they added themselves, not from the built-in library) show up in
 their workout history with just a name, not a category, since categories
 for custom exercises aren't shared across accounts — everything from the
-875+ built-in library works normally either way.
+built-in library works normally either way.
 
 ## Onboarding and privacy
 
@@ -266,13 +266,18 @@ for custom exercises aren't shared across accounts — everything from the
 
 ## Exercise library
 
-The built-in library (`public/exercises-data.json`) is adapted from the
-[free-exercise-db](https://github.com/yuhonas/free-exercise-db) project, an
-open, public-domain dataset of exercises with names, categories, equipment,
-difficulty level, step-by-step instructions, and two demonstration images per
-exercise. Those two images are what the "how it's performed" animation on
-each exercise's detail screen crossfades between. It's a static file served
-alongside the app (not bundled into the JS) and fetched once at startup.
+The built-in library (`src/library.js`) is a hand-picked list of about 100
+common gym exercises with plain names ("Barbell Bench Press", "Machine
+Incline Press", "Cable Lat Pulldown"…), each with short how-to steps. Every
+exercise has a drawn mannequin animation (`src/figures.js`): a grey figure
+moving between the start and end of the lift, with the equipment drawn in.
+They're plain SVG, so there are no image files to load.
+
+Older versions used a much larger library. `public/exercises-legacy.json`
+maps each of those old exercises to its new equivalent, and the app applies
+it automatically to your templates, history and any workout in progress, so
+nothing is lost and PRs carry over. Old exercises with no equivalent keep
+their name in your templates and history but don't appear in the library.
 
 ## Project structure
 
@@ -293,7 +298,9 @@ src/
   setcards.js         Exercise cards, rest picker, menus and progression shared by the workout screen and editor
   db.js               All Supabase reads/writes
   supabaseClient.js   Supabase client setup
-  exercises.js        Built-in exercise library + starter templates
+  exercises.js        Starter templates + loading the library and old-exercise mapping
+  library.js          The ~100 built-in exercises (names, equipment, how-to steps)
+  figures.js          Drawn mannequin animations for each exercise
   chart.js            Small SVG progress chart
   utils.js            Formatting/unit-conversion helpers
   style.css           All styling

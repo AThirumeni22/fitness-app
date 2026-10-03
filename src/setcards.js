@@ -5,6 +5,7 @@
 
 import { fmtNum, fromKg, toKg, roundDisp, escapeHtml, fmtShort, fmtClock } from "./utils.js";
 import { drawChart } from "./chart.js";
+import { figureSvg } from "./figures.js";
 
 /* ================= template data ================= */
 
@@ -63,12 +64,14 @@ function equipLabel(ex) {
   const e = (ex.equipment || "").trim();
   if (!e || e === "other") return "";
   if (e === "body only") return "Bodyweight";
+  if (ex.legacy) return "";
   return e.charAt(0).toUpperCase() + e.slice(1);
 }
 
+// The exercise's drawn figure (start position); a plain glyph for custom or
+// old exercises that have no drawing.
 export function thumbHtml(ex) {
-  const img = ex && Array.isArray(ex.images) && ex.images[0];
-  return `<span class="xc-thumb" aria-hidden="true">${IC.dumbbell}${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ""}</span>`;
+  return `<span class="xc-thumb" aria-hidden="true">${ex && ex.fig ? figureSvg(ex, { pose: "auto", fit: true }) : IC.dumbbell}</span>`;
 }
 
 // opts:
