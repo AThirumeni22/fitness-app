@@ -8,7 +8,7 @@ const motionOK = () => !reduceMotion.matches;
 const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
 
 /* ---------- 1. press ripple ---------- */
-const RIPPLE_SEL = ".btn, .chip-btn, .icon-btn, .home-tile, .tabbar button, .cat-chip, .seg-toggle button, .metric-toggle button, .preset-row button, .auth-tabs button, .rest-actions button";
+const RIPPLE_SEL = ".btn, .chip-btn, .icon-btn, .home-tile, .tabbar button, .cat-chip, .seg-toggle button, .metric-toggle button, .preset-row button, .auth-tabs button, .wb-big";
 document.addEventListener("pointerdown", (e) => {
   if (!motionOK()) return;
   const el = e.target.closest(RIPPLE_SEL);
@@ -25,7 +25,7 @@ document.addEventListener("pointerdown", (e) => {
 }, { passive: true });
 
 /* ---------- 2. cursor spotlight on surfaces + tilt on home tiles ---------- */
-const SPOT_SEL = ".card, .exercise-card, .session-card, .tpl-list-card, .pin-tile, .feed-card, .plan-card, .dw-card, .home-tile, .stat-tile, .auth-card, details.cat-group";
+const SPOT_SEL = ".card, .xcard, .session-card, .tpl-list-card, .pin-tile, .feed-card, .plan-card, .dw-card, .home-tile, .stat-tile, .auth-card, details.cat-group";
 document.addEventListener("pointermove", (e) => {
   if (!finePointer.matches) return;
   const el = e.target.closest(SPOT_SEL);
@@ -116,17 +116,15 @@ function burst(x, y, color) {
   document.body.appendChild(b);
   setTimeout(() => b.remove(), 700);
 }
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest(".set-done");
+// Called by the workout screen once a set's row has re-rendered as done.
+export function celebrateSet(btn) {
   if (!btn) return;
-  // the app's own handler (on the button) has already toggled .on by now
-  if (!btn.classList.contains("on")) return;
   const r = btn.getBoundingClientRect();
   burst(r.left + r.width / 2, r.top + r.height / 2);
-  const row = btn.closest(".set-row");
+  const row = btn.closest(".xs-row");
   if (row) { row.classList.remove("fx-done"); void row.offsetWidth; row.classList.add("fx-done"); }
   if (navigator.vibrate) try { navigator.vibrate(12); } catch (_) {}
-});
+}
 
 /* ---------- 6. confetti for PRs and finished workouts ---------- */
 const CONFETTI = ["#818CF8", "#22D3EE", "#A78BFA", "#FBBF24", "#F472B6", "#34D399"];

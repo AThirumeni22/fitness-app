@@ -20,8 +20,8 @@ no server to run yourself.
    only ever read or write their own rows.
 2b. Run a second query with the contents of
    [`supabase/migration_2_social.sql`](./supabase/migration_2_social.sql).
-   This adds everything for Friends, the Calendar, gym-time polls, and the
-   guided template player: friend requests, letting friends see each
+   This adds everything for Friends, the Calendar, and gym-time polls:
+   friend requests, letting friends see each
    other's workouts, a day-by-day photo/video feed, and two public storage
    buckets (`avatars`, `day-media`) it creates for you. Run it once, after
    schema.sql.
@@ -179,15 +179,14 @@ check the phone's notification settings for Obonto, and look at
   visibility that already existed via Row Level Security — there's no
   separate "share" step; finishing a workout is what makes it show up.
 - **Pin templates** — the star icon on any template (Exercises tab) pins
-  it as a quick-start tile on the Train tab home screen. Tap Start for a
-  normal session, or swipe the tile right to reveal "Guided."
+  it as a quick-start tile on the Train tab home screen — tap Start.
 - **Muscles hit** — the home screen's radial chart shows total volume
   (weight × reps) per muscle group for the last 30 days or all time; the
   more rings a wedge fills, the more that group got relative to your
   most-trained one.
 - **Update template after a workout** — finishing a workout started from a
-  template offers to save today's heaviest set (weight + reps) and set
-  count back into that template, with a before/after preview.
+  template offers to save today's sets (weight, reps and rest for each set)
+  back into that template, with a before/after preview.
 - **Hide default templates** — the crossed-out-eye icon on Push/Pull/Leg
   Day (Exercises tab) hides that one from your list; nothing is deleted,
   and "Restore hidden default templates" in Profile settings brings them
@@ -213,17 +212,21 @@ check the phone's notification settings for Obonto, and look at
   photo your friends see you as (stored avatar in the `avatars` bucket).
   It's also where your weight unit (kg/lb) and your default rest timer
   live now, under a Settings section.
-- **Guided template player** — from the Exercises tab, the ▶ icon on a
-  template runs it set-by-set: hit Play, then the checkmark when you're
-  done with a weight/reps you can adjust on the spot; it tells you if
-  that's a new PR or below your last best, then starts that exercise's
-  own rest timer automatically. The pencil icon opens the template
-  editor, where you can reorder exercises, add/remove them, and set a
-  target sets/reps/weight/rest per exercise for the player to use.
-- **Last time** — every exercise in a workout shows what you did for it
-  last session (as faint hints in each set, plus a "Last: 60×8, 60×8" line
-  you can tap to fill them in). Sets logged with reps but no weight count
-  as bodyweight and show as "BW".
+- **Workout screen** — one screen for every workout. Each exercise is a
+  card of sets, pre-filled from the template (or from last time). Tap ▶ on
+  a set when you start it (a set timer runs in the bar at the bottom), then
+  ✓ when you're done: the row turns green and that set's rest counts down
+  on the chip under it and in the bar (−15 / +15, and the bar's big ▶
+  starts the next set). Tap a set number to delete it, the ⏱ to set rest
+  for every set, ⋯ to move / replace / remove the exercise, and
+  Progression for a chart of your best sets. Finishing with sets you
+  filled in but didn't tick asks whether to log them. Sets with reps but
+  no weight count as bodyweight ("BW").
+- **Supersets** — tap the chain between two exercises to link them: you
+  go A1 → B1 → rest → A2 → B2…, resting only after each round.
+- **Templates with per-set targets** — the pencil icon on a template opens
+  the editor: every set has its own weight, reps and rest, plus the same
+  ⏱, ⋯, chain and Progression tools as the workout screen.
 - **Exercise picker & details** — "Add exercise" lists your recent
   exercises first. Tapping a library exercise shows your best, how often
   you've done it and your last session, with a button to add it to the
@@ -232,12 +235,10 @@ check the phone's notification settings for Obonto, and look at
   (needs migration_7).
 - **Delete a photo/video** — tap one of your own on a calendar day, then
   Delete. Friends' posts can't be deleted by you.
-- **Per-exercise rest timer** — each exercise in a template can have its
-  own rest duration (set in the template editor); exercises without one
-  fall back to the default rest timer from your Profile settings. When
-  the countdown hits zero the banner flips color and turns into a
-  stopwatch counting up, so you can see exactly how far over rest you've
-  gone before starting your next set.
+- **Rest timer** — every set has its own rest (from the template, or the
+  default rest timer in Profile settings). When the countdown hits zero
+  the bar turns red, beeps and counts up, so you can see how far over rest
+  you've gone.
 
 One current limitation worth knowing: a friend's own custom exercises
 (ones they added themselves, not from the built-in library) show up in
@@ -280,7 +281,7 @@ index.html            Entry HTML
 src/
   main.js             Boots the app: shows the auth screen or the app
   auth.js             Sign in / sign up screen
-  app.js              Main app UI (Train / History / Exercises tabs, guided player, template sharing)
+  app.js              Main app UI (Train / History / Exercises tabs, workout screen, template sharing)
   onboarding.js       First-run name + privacy-notice (GDPR consent) flow
   notifications.js    Top-bar bell + notification list
   push.js             Turning push notifications on/off on this device
@@ -288,7 +289,8 @@ src/
   friends.js          Friends tab (requests, add by email)
   calendar.js         Calendar tab (visits, day photos/videos, gym-time polls)
   profile.js          Profile sheet (name + avatar)
-  player.js           Template editor (targets, reorder) used by app.js's player
+  player.js           Template editor (per-set weight / reps / rest, supersets)
+  setcards.js         Exercise cards, rest picker, menus and progression shared by the workout screen and editor
   db.js               All Supabase reads/writes
   supabaseClient.js   Supabase client setup
   exercises.js        Built-in exercise library + starter templates

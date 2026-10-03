@@ -14,6 +14,8 @@ import { muscleChartHtml } from "./musclechart.js";
 import { needsOnboarding, runOnboarding, openPrivacySheet } from "./onboarding.js";
 import { mountNotifications, tabFromUrl } from "./notifications.js";
 import { pushSupport, isPushEnabled, enablePush, disablePush, syncPushSubscription } from "./push.js";
+import { celebrateSet } from "./fx.js";
+import { templateSets, buildTarget, exerciseCardHtml, chainHtml, choiceDialog, pickRest, exerciseMenu, openProgression, ICONS } from "./setcards.js";
 
 export async function mountApp(root, user) {
   root.innerHTML = `<div class="boot-loading">Loading your workouts…</div>`;
@@ -255,7 +257,7 @@ export async function mountApp(root, user) {
         <section id="tab-calendar" class="tab" hidden></section>
       </main>
 
-      <div class="rest-banner" id="restBanner" hidden></div>
+      <div class="wbar" id="workoutBar" hidden></div>
 
       <nav class="tabbar">
         <button data-tab="train" class="active">
@@ -485,18 +487,49 @@ export async function mountApp(root, user) {
     else if (currentTab === "exercises") renderExercises();
     else if (currentTab === "friends") renderFriends(ctx);
     else if (currentTab === "calendar") renderCalendar(ctx);
-    renderRestBanner();
+    renderBar();
   }
 
   /* ================= TRAIN ================= */
-  let playerArmed = false;
-  let manualPtr = null;
+  // One workout screen for everything: every exercise is a card of sets
+  // (pre-filled from the template or from last time). Tap ▶ to start a set,
+  // ✓ when it's done — the row turns green and that set's rest counts down.
+  // The bar at the bottom always offers the next step.
+
+  function blankSet() { return { kg: null, reps: null, rest: state.restDuration, done: false }; }
+
+  // Drafts from before this screen (guided player / old set table) kept
+  // rest on the exercise and had a `guided` flag; bring them up to date.
+  function normalizeActive(a) {
+    if (!a || !Array.isArray(a.exercises)) return null;
+    a.exercises.forEach((ex) => {
+      const legacyRest = (ex.target && ex.target.rest) || ex.restSec || null;
+      ex.sets = (ex.sets || []).map((s) => ({ kg: s.kg ?? null, reps: s.reps ?? null, rest: s.rest || legacyRest || state.restDuration, done: !!s.done }));
+      if (!ex.sets.length) ex.sets.push(blankSet());
+      ex.supersetNext = !!ex.supersetNext;
+      delete ex.target; delete ex.restSec;
+    });
+    delete a.guided;
+    if (!a.name) { const t = a.templateId && byId(state.templates, a.templateId); a.name = t ? t.name : "Workout"; }
+    if (a.current && !setAt(a, a.current)) a.current = null;
+    if (a.rest && !setAt(a, a.rest)) a.rest = null;
+    return a;
+  }
+  function setAt(a, ref) { const ex = ref && a.exercises[ref.exi]; return ex ? ex.sets[ref.si] || null : null; }
+
+  // Sets for an exercise added on the fly: last time's (same count and
+  // numbers), or one empty set if it's never been logged.
+  function prefillSetsFor(exId) {
+    const last = lastSetsFor(exId);
+    if (!last) return [blankSet()];
+    return last.sets.map((s) => ({ kg: s.kg || null, reps: s.reps, rest: state.restDuration, done: false }));
+  }
 
   // Resolves true once the workout has started, false if the person chose
   // to keep the one already in progress.
-  async function startWorkout(templateId, guided, firstExerciseId) {
+  async function startWorkout(templateId, firstExerciseId) {
     const cur = state.active;
-    if (cur && cur.exercises.some((ex) => ex.sets.some((s) => s.done || s.kg != null || s.reps != null))) {
+    if (cur && cur.exercises.some((ex) => ex.sets.some((s) => s.done))) {
       const ok = await confirmDialog({
         title: "Replace your current workout?",
         message: "You have a workout in progress. Starting a new one discards it and everything logged so far.",
@@ -506,76 +539,167 @@ export async function mountApp(root, user) {
       });
       if (!ok) return false;
     }
-    let exList = [];
-    if (firstExerciseId) exList = [{ exerciseId: firstExerciseId, sets: [{ kg: null, reps: null, done: false }] }];
-    if (templateId) {
-      const t = byId(state.templates, templateId);
-      if (t) {
-        if (guided) {
-          exList = t.exerciseIds.map((id) => {
-            const tg = (t.targets && t.targets[id]) || {};
-            const n = tg.sets || 3;
-            const tw = targetWeight(tg);
-            return {
-              exerciseId: id,
-              // weightKg so the target still reads right if the unit is switched mid-workout
-              target: { sets: n, reps: tg.reps || null, weightKg: tw != null ? toKg(tw, state.unit) : null, rest: tg.rest || state.restDuration },
-              sets: Array.from({ length: n }, () => ({ kg: null, reps: null, done: false }))
-            };
-          });
-        } else {
-          exList = t.exerciseIds.map((id) => {
-            const tg = (t.targets && t.targets[id]) || {};
-            return { exerciseId: id, restSec: tg.rest || null, sets: [{ kg: null, reps: null, done: false }] };
-          });
-        }
-      }
+    let name = "Workout";
+    let exList = firstExerciseId ? [{ exerciseId: firstExerciseId, supersetNext: false, sets: prefillSetsFor(firstExerciseId) }] : [];
+    const t = templateId && byId(state.templates, templateId);
+    if (t) {
+      name = t.name;
+      exList = t.exerciseIds.map((id) => {
+        const tg = (t.targets && t.targets[id]) || {};
+        const last = lastSetsFor(id);
+        // Template numbers first; anything the template leaves blank comes from last time.
+        const sets = templateSets(tg, state.unit).map((ts, i) => {
+          const ls = last && last.sets[Math.min(i, last.sets.length - 1)];
+          return {
+            kg: ts.weight != null ? (ts.weight ? toKg(ts.weight, state.unit) : null) : (ls && ls.kg ? ls.kg : null),
+            reps: ts.reps ?? (ls ? ls.reps : null),
+            rest: ts.rest || state.restDuration,
+            done: false
+          };
+        });
+        return { exerciseId: id, supersetNext: !!tg.supersetNext, sets };
+      });
     }
-    playerArmed = false;
-    manualPtr = null;
-    state.active = { startedAt: Date.now(), exercises: exList, guided: !!guided, templateId: templateId || null };
+    state.active = { startedAt: Date.now(), name, templateId: t ? t.id : null, exercises: exList, current: null, rest: null };
     saveActiveDraft();
     renderTrain();
-    toast(templateId ? (guided ? "Guided workout started" : "Workout started") : firstExerciseId ? "Workout started" : "Empty workout started");
+    renderBar();
+    toast(t ? `${t.name} started` : "Workout started");
     return true;
   }
 
-  // After a template-based workout: offer to write today's numbers back into
-  // the template so next time's guided targets start from where you left off.
-  // Per exercise we take the heaviest logged set (reps from that same set)
-  // and the number of sets you actually logged; rest time is left alone.
-  function offerTemplateUpdate(templateId, cleanEx) {
+  // The order sets are done in: straight through each exercise, except
+  // supersets (exercises joined with the chain) go round by round —
+  // A1, B1, A2, B2… — with the rest only after each round.
+  function setOrder(a) {
+    const out = [];
+    let i = 0;
+    while (i < a.exercises.length) {
+      let j = i;
+      while (j < a.exercises.length - 1 && a.exercises[j].supersetNext) j++;
+      if (j === i) a.exercises[i].sets.forEach((_, si) => out.push({ exi: i, si, group: null }));
+      else {
+        const rounds = Math.max(...a.exercises.slice(i, j + 1).map((e) => e.sets.length));
+        for (let r = 0; r < rounds; r++) for (let k = i; k <= j; k++) if (a.exercises[k].sets[r]) out.push({ exi: k, si: r, group: i });
+      }
+      i = j + 1;
+    }
+    return out;
+  }
+  // The next set still to do after `after` (or from the top), wrapping round
+  // to anything skipped earlier.
+  function nextSet(a, after) {
+    const order = setOrder(a);
+    if (!order.length) return null;
+    let start = 0;
+    if (after) { const p = order.findIndex((o) => o.exi === after.exi && o.si === after.si); if (p > -1) start = p + 1; }
+    for (let k = 0; k < order.length; k++) {
+      const o = order[(start + k) % order.length];
+      if (!a.exercises[o.exi].sets[o.si].done && !(a.current && a.current.exi === o.exi && a.current.si === o.si)) return o;
+    }
+    return null;
+  }
+
+  function startSet(exi, si, scroll) {
+    const a = state.active;
+    if (!setAt(a, { exi, si })) return;
+    a.rest = null;
+    a.current = { exi, si, startedAt: Date.now() };
+    saveActiveDraft();
+    renderTrain();
+    renderBar();
+    if (scroll) scrollToSet(exi, si);
+  }
+
+  function completeSet(exi, si) {
+    const a = state.active;
+    const ex = a.exercises[exi], s = setAt(a, { exi, si });
+    if (!s) return;
+    if (s.reps == null || s.reps < 1) {
+      toast("Enter your reps first");
+      const inp = document.querySelector(`.xcard[data-exi="${exi}"] .xs-reps[data-si="${si}"]`);
+      if (inp) inp.focus();
+      return;
+    }
+    const prevBest = bestPr(ex.exerciseId);
+    s.done = true;
+    a.current = null;
+    // In a superset, go straight to the partner's set in this round; rest after the round.
+    const order = setOrder(a);
+    const me = order.find((o) => o.exi === exi && o.si === si);
+    const nx = nextSet(a, { exi, si });
+    const sameRound = me && me.group != null && nx && nx.si === si && order.find((o) => o.exi === nx.exi && o.si === nx.si).group === me.group;
+    a.rest = !sameRound && s.rest > 0 ? { exi, si, endsAt: Date.now() + s.rest * 1000, duration: s.rest } : null;
+    saveActiveDraft();
+    if (s.kg && prevBest && s.kg > prevBest) toast(`New PR — ${fmtNum(fromKg(s.kg, state.unit))} ${state.unit}`);
+    renderTrain();
+    renderBar();
+    celebrateSet(document.querySelector(`.xcard[data-exi="${exi}"] .xs-act[data-si="${si}"]`));
+  }
+
+  function undoSet(exi, si) {
+    const a = state.active, s = setAt(a, { exi, si });
+    if (!s) return;
+    s.done = false;
+    if (a.rest && a.rest.exi === exi && a.rest.si === si) a.rest = null;
+    saveActiveDraft();
+    renderTrain();
+    renderBar();
+  }
+
+  function scrollToSet(exi, si) {
+    if (currentTab !== "train") return;
+    const row = document.querySelector(`.xcard[data-exi="${exi}"] .xs-row[data-si="${si}"]`);
+    if (row) row.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // Reordering/removing exercises shifts indices; keep the set in progress
+  // and the rest countdown pointing at the same set objects.
+  function keepRefs(a, mutate) {
+    const curSet = setAt(a, a.current), restSet = setAt(a, a.rest);
+    mutate();
+    const find = (obj) => {
+      if (!obj) return null;
+      for (let exi = 0; exi < a.exercises.length; exi++) { const si = a.exercises[exi].sets.indexOf(obj); if (si > -1) return { exi, si }; }
+      return null;
+    };
+    const c = find(curSet), r = find(restSet);
+    a.current = c ? { ...a.current, ...c } : null;
+    a.rest = r ? { ...a.rest, ...r } : null;
+    if (a.exercises.length) a.exercises[a.exercises.length - 1].supersetNext = false;
+  }
+
+  // After a template-based workout: offer to write today's sets back into
+  // the template (per set: weight, reps, rest), plus any superset changes.
+  function offerTemplateUpdate(templateId, loggedEx) {
     const t = byId(state.templates, templateId);
     if (!t) return;
     const newTargets = { ...(t.targets || {}) };
     const changes = [];
-    cleanEx.forEach((ex) => {
+    const str = (sets) => sets.map((s) => `${s.weight == null ? "–" : s.weight ? fmtNum(s.weight) : "BW"}×${s.reps ?? "?"}`).join(", ");
+    loggedEx.forEach((ex) => {
       if (!t.exerciseIds.includes(ex.exerciseId)) return;
-      const top = ex.sets.reduce((best, st) => (!best || st.kg > best.kg || (st.kg === best.kg && st.reps > best.reps) ? st : best), null);
-      if (!top) return;
-      const old = newTargets[ex.exerciseId] || {};
-      const next = { ...old, sets: ex.sets.length, reps: top.reps, weight: roundDisp(fromKg(top.kg, state.unit)), unit: state.unit };
-      if (next.sets !== (old.sets || 3) || next.reps !== old.reps || next.weight !== targetWeight(old)) {
-        changes.push({ name: ex.name, old, next });
-        newTargets[ex.exerciseId] = next;
+      const oldTg = (t.targets || {})[ex.exerciseId] || {};
+      const oldSets = templateSets(oldTg, state.unit);
+      const newSets = ex.sets.map((s) => ({ weight: s.kg ? roundDisp(fromKg(s.kg, state.unit)) : 0, reps: s.reps, rest: s.rest }));
+      const restChanged = oldSets.length === newSets.length && oldSets.some((s, i) => (s.rest || state.restDuration) !== newSets[i].rest);
+      const linkChanged = !!oldTg.supersetNext !== !!ex.supersetNext;
+      if (str(oldSets) !== str(newSets) || restChanged || linkChanged) {
+        changes.push({ name: ex.name, old: str(oldSets), next: str(newSets) });
+        newTargets[ex.exerciseId] = buildTarget(newSets, state.unit, ex.supersetNext);
       }
     });
     if (!changes.length) return;
 
-    const fmtT = (o) => {
-      const w = targetWeight(o);
-      if (w == null) return "no target";
-      return `${o.sets || 3}×${o.reps || "?"} @ ${w ? `${fmtNum(w)} ${state.unit}` : "bodyweight"}`;
-    };
     const rowsHtml = changes.map((c) => `
       <div class="upd-row">
         <div class="upd-name">${escapeHtml(c.name)}</div>
-        <div class="upd-vals"><span class="upd-old">${escapeHtml(fmtT(c.old))}</span><span class="upd-arrow">→</span><span class="upd-new">${escapeHtml(fmtT(c.next))}</span></div>
+        <div class="upd-vals"><span class="upd-old">${escapeHtml(c.old === c.next ? "rest / superset" : c.old)}</span><span class="upd-arrow">→</span><span class="upd-new">${escapeHtml(c.old === c.next ? "updated" : c.next)}</span></div>
       </div>`).join("");
 
     openSheet(`
       <div class="sheet-title"><h3>Update template?</h3><button class="icon-btn" id="sheetClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <p class="muted">Save today's numbers into <strong>${escapeHtml(t.name)}</strong> so your next guided run starts from here.${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
+      <p class="muted">Save today's sets into <strong>${escapeHtml(t.name)}</strong> so next time starts from here (${state.unit}).${t.isCustom ? "" : " Since it's a default template, this saves your own copy of it."}</p>
       <div class="upd-list">${rowsHtml}</div>
       <button class="btn btn-primary btn-block" id="updTplBtn">Update template</button>
       <button class="btn btn-ghost btn-block" id="skipUpdTplBtn">Keep as is</button>
@@ -608,46 +732,60 @@ export async function mountApp(root, user) {
   async function finishWorkout() {
     const a = state.active;
     if (!a) return;
-    // A set counts once it has reps; no weight means bodyweight (0 kg), so
-    // pull-ups, dips etc. aren't silently dropped.
-    const cleanEx = a.exercises
+    const hasReps = (s) => s.reps != null && s.reps > 0;
+    const unticked = a.exercises.reduce((n, ex) => n + ex.sets.filter((s) => !s.done && hasReps(s)).length, 0);
+    let includeUnticked = false;
+    if (unticked) {
+      const choice = await choiceDialog({
+        title: `${unticked} set${unticked === 1 ? "" : "s"} not ticked`,
+        message: "They have numbers filled in but weren't marked done. Save them too?",
+        choices: [
+          { label: "Log them too", value: "all", style: "primary" },
+          { label: "Only ticked sets", value: "ticked", style: "secondary" },
+          { label: "Keep training", value: "back", style: "secondary" }
+        ]
+      });
+      if (!choice || choice === "back") return;
+      includeUnticked = choice === "all";
+    }
+    // Reps with no weight = bodyweight (0 kg).
+    const logged = a.exercises
       .map((ex) => ({
         exerciseId: ex.exerciseId,
         name: exName(ex.exerciseId),
-        sets: ex.sets.filter((s) => s.reps != null && s.reps > 0).map((s) => ({ kg: s.kg != null ? s.kg : 0, reps: s.reps }))
+        supersetNext: ex.supersetNext,
+        sets: ex.sets.filter((s) => hasReps(s) && (s.done || includeUnticked)).map((s) => ({ kg: s.kg != null ? s.kg : 0, reps: s.reps, rest: s.rest }))
       }))
       .filter((ex) => ex.sets.length > 0);
 
-    if (cleanEx.length === 0) {
-      state.active = null;
-      state.timer = null;
-      playerArmed = false; manualPtr = null;
-      saveActiveDraft();
-      renderTrain();
-      renderRestBanner();
-      toast("Workout discarded — no sets logged");
+    if (!logged.length) {
+      const ok = await confirmDialog({
+        title: "Nothing to save yet",
+        message: "No sets are ticked off. Discard this workout?",
+        confirmText: "Discard workout",
+        cancelText: "Keep training",
+        danger: true
+      });
+      if (ok) discardWorkout();
       return;
     }
 
     const finishBtn = document.getElementById("finishBtn");
     if (finishBtn) { finishBtn.disabled = true; finishBtn.textContent = "Saving…"; }
-
     const workout = {
       date: new Date(a.startedAt).toISOString(),
       durationSec: Math.round((Date.now() - a.startedAt) / 1000),
-      exercises: cleanEx
+      exercises: logged.map((ex) => ({ exerciseId: ex.exerciseId, name: ex.name, sets: ex.sets.map((s) => ({ kg: s.kg, reps: s.reps })) }))
     };
     try {
       const id = await db.saveWorkout(user.id, workout);
       state.history.unshift({ id: id || uid(), ...workout });
       state.active = null;
-      state.timer = null;
-      playerArmed = false; manualPtr = null;
       saveActiveDraft();
       renderTrain();
-      renderRestBanner();
+      renderBar();
       toast("Workout saved");
-      if (a.templateId) offerTemplateUpdate(a.templateId, cleanEx);
+      if (a.templateId) offerTemplateUpdate(a.templateId, logged);
     } catch (err) {
       toast("Couldn't save workout — check your connection and try again");
       if (finishBtn) { finishBtn.disabled = false; finishBtn.textContent = "Finish"; }
@@ -656,229 +794,152 @@ export async function mountApp(root, user) {
 
   function discardWorkout() {
     state.active = null;
-    state.timer = null;
-    playerArmed = false; manualPtr = null;
     saveActiveDraft();
     renderTrain();
-    renderRestBanner();
+    renderBar();
     toast("Workout discarded");
   }
 
-  function currentPointer(a) {
-    for (let exi = 0; exi < a.exercises.length; exi++) {
-      const sets = a.exercises[exi].sets;
-      for (let si = 0; si < sets.length; si++) {
-        if (!sets[si].done) return { exi, si };
-      }
+  async function workoutMenu() {
+    const choice = await choiceDialog({
+      title: state.active.name || "Workout",
+      choices: [
+        { label: "+ Add exercise", value: "add", style: "primary" },
+        { label: "Discard workout", value: "discard", style: "danger" },
+        { label: "Cancel", value: null, style: "secondary" }
+      ]
+    });
+    if (choice === "add") openAddExerciseSheet();
+    if (choice === "discard") {
+      const ok = await confirmDialog({ title: "Discard this workout?", message: "Nothing from it will be saved.", confirmText: "Discard", cancelText: "Keep training", danger: true });
+      if (ok) discardWorkout();
     }
-    return null;
   }
 
-  function jumpToExercise(a, exi) {
-    const sets = a.exercises[exi].sets;
-    let si = sets.findIndex((s) => !s.done);
-    if (si === -1) si = 0;
-    manualPtr = { exi, si };
-    playerArmed = false;
-    renderTrain();
+  async function exerciseCardMenu(exi) {
+    const a = state.active, ex = a.exercises[exi];
+    const choice = await exerciseMenu(exName(ex.exerciseId), { canUp: exi > 0, canDown: exi < a.exercises.length - 1 });
+    if (!choice) return;
+    if (choice === "up" || choice === "down") {
+      const j = choice === "up" ? exi - 1 : exi + 1;
+      keepRefs(a, () => {
+        [a.exercises[exi], a.exercises[j]] = [a.exercises[j], a.exercises[exi]];
+        // Moving breaks any superset link around the two swapped exercises.
+        [Math.min(exi, j) - 1, exi, j].forEach((k) => { if (a.exercises[k]) a.exercises[k].supersetNext = false; });
+      });
+    } else if (choice === "replace") {
+      renderPickerSheet("Replace exercise", (id) => {
+        keepRefs(a, () => { ex.exerciseId = id; ex.sets = prefillSetsFor(id); });
+        saveActiveDraft(); closeSheet(); renderTrain(); renderBar();
+      }, { exclude: a.exercises.map((e) => e.exerciseId) });
+      return;
+    } else if (choice === "rest") {
+      const sec = await pickRest(ex.sets[0] ? ex.sets[0].rest : state.restDuration, "Rest for every set");
+      if (sec == null) return;
+      ex.sets.forEach((s) => { s.rest = sec; });
+    } else if (choice === "remove") {
+      if (ex.sets.some((s) => s.done)) {
+        const ok = await confirmDialog({ title: `Remove ${exName(ex.exerciseId)}?`, message: "Its ticked sets won't be saved.", confirmText: "Remove", cancelText: "Keep it", danger: true });
+        if (!ok) return;
+      }
+      keepRefs(a, () => {
+        if (a.exercises[exi - 1] && !ex.supersetNext) a.exercises[exi - 1].supersetNext = false;
+        a.exercises.splice(exi, 1);
+      });
+    }
+    saveActiveDraft(); renderTrain(); renderBar();
   }
 
-  function renderGuidedPlayer(el, a) {
-    const ptr = (manualPtr && a.exercises[manualPtr.exi]) ? manualPtr : currentPointer(a);
-    const totalSets = a.exercises.reduce((n, ex) => n + ex.sets.length, 0);
-    const doneSets = a.exercises.reduce((n, ex) => n + ex.sets.filter((s) => s.done).length, 0);
-    const headHtml = `
-      <div class="active-head">
-        <div><div class="elapsed-label">In progress · Guided</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
-        <div class="head-actions">
-          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
-          <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
-        </div>
-      </div>
-      <div id="discardConfirm"></div>`;
-
-    if (!ptr) {
-      el.innerHTML = headHtml + `
-        <div class="card center player-card">
-          <h2>All sets done</h2>
-          <p class="muted">${doneSets} of ${totalSets} sets logged. Tap Finish to save.</p>
-        </div>`;
-      bindGuidedHead(a);
+  // The workout screen's buttons, handled once on the tab (cards are
+  // re-rendered often, so per-button listeners would pile up).
+  async function onWorkoutClick(e) {
+    const a = state.active;
+    const b = e.target.closest("button");
+    if (!a || !b) return;
+    if (b.id === "finishBtn") return finishWorkout();
+    if (b.id === "workoutMenuBtn") return workoutMenu();
+    if (b.id === "addExerciseBtn") return openAddExerciseSheet();
+    if (b.classList.contains("xchain-btn")) {
+      const i = +b.getAttribute("data-exi");
+      if (a.exercises[i]) { a.exercises[i].supersetNext = !a.exercises[i].supersetNext; saveActiveDraft(); renderTrain(); renderBar(); }
       return;
     }
+    const card = b.closest(".xcard");
+    if (!card) return;
+    const exi = +card.getAttribute("data-exi"), ex = a.exercises[exi];
+    if (!ex) return;
+    const si = b.hasAttribute("data-si") ? +b.getAttribute("data-si") : -1;
+    const s = si > -1 ? ex.sets[si] : null;
 
-    const ex = a.exercises[ptr.exi];
-    const set = ex.sets[ptr.si];
-    const target = ex.target || {};
-    const prevBest = bestPr(ex.exerciseId);
-    const lastSet = ptr.si > 0 ? ex.sets[ptr.si - 1] : null;
-    // Target weight in the current unit (drafts from before targets were
-    // kept in kg still carry a plain `weight`).
-    const tW = target.weightKg != null ? roundDisp(fromKg(target.weightKg, state.unit))
-      : target.weight != null && target.weight !== "" ? Number(target.weight) : null;
-    const lastTime = lastSetsFor(ex.exerciseId);
-    const lastTimeSet = lastTime ? lastTime.sets[Math.min(ptr.si, lastTime.sets.length - 1)] : null;
-    const wStr = (kg) => (kg ? fmtNum(fromKg(kg, state.unit)) : "");
-    const defaultW = set.kg != null ? wStr(set.kg)
-      : lastSet && lastSet.kg != null ? wStr(lastSet.kg)
-      : tW != null ? (tW ? fmtNum(tW) : "")
-      : lastTimeSet ? wStr(lastTimeSet.kg)
-      : prevBest ? wStr(prevBest) : "";
-    const defaultReps = set.reps != null ? set.reps
-      : lastSet && lastSet.reps != null ? lastSet.reps
-      : target.reps != null ? target.reps
-      : lastTimeSet ? lastTimeSet.reps : "";
+    if (b.classList.contains("xs-act") && s) {
+      if (s.done) undoSet(exi, si);
+      else if (a.current && a.current.exi === exi && a.current.si === si) completeSet(exi, si);
+      else startSet(exi, si);
+    } else if (b.classList.contains("xs-restchip") && s) {
+      const sec = await pickRest(s.rest, `Rest after set ${si + 1}`);
+      if (sec == null) return;
+      if (a.rest && a.rest.exi === exi && a.rest.si === si) { a.rest.endsAt += (sec - s.rest) * 1000; a.rest.duration = sec; a.rest.beeped = false; }
+      s.rest = sec;
+      saveActiveDraft(); renderTrain(); renderBar();
+    } else if (b.classList.contains("xs-num") && s) {
+      const ok = await confirmDialog({ title: `Delete set ${si + 1}?`, message: `${exName(ex.exerciseId)}${s.done ? " — this set is already ticked" : ""}.`, confirmText: "Delete set", cancelText: "Keep it", danger: true });
+      if (!ok) return;
+      keepRefs(a, () => { ex.sets.splice(si, 1); if (!ex.sets.length) ex.sets.push(blankSet()); });
+      saveActiveDraft(); renderTrain(); renderBar();
+    } else if (b.classList.contains("xc-add")) {
+      const last = ex.sets[ex.sets.length - 1];
+      ex.sets.push(last ? { kg: last.kg, reps: last.reps, rest: last.rest, done: false } : blankSet());
+      saveActiveDraft(); renderTrain(); renderBar();
+    } else if (b.classList.contains("xc-rest")) {
+      const sec = await pickRest(ex.sets[0] ? ex.sets[0].rest : state.restDuration, "Rest for every set");
+      if (sec == null) return;
+      ex.sets.forEach((x) => { x.rest = sec; });
+      saveActiveDraft(); renderTrain();
+    } else if (b.classList.contains("xc-menu")) {
+      exerciseCardMenu(exi);
+    } else if (b.classList.contains("xc-prog")) {
+      openProgression({ history: state.history, unit: state.unit, name: exName(ex.exerciseId) }, ex.exerciseId);
+    }
+  }
 
-    el.innerHTML = headHtml + `
-      <p class="muted player-meta">Exercise ${ptr.exi + 1} of ${a.exercises.length} · ${doneSets}/${totalSets} sets done</p>
-      <div class="card center player-card">
-        <div class="stack-sm">
-        <h2>${escapeHtml(exName(ex.exerciseId))}</h2>
-        <p class="muted player-target">Set ${ptr.si + 1} of ${ex.sets.length}${target.reps ? ` · target ${target.reps} reps` : ""}${tW ? ` @ ${fmtNum(tW)} ${state.unit}` : ""}${target.rest ? ` · rest ${fmtClock(target.rest)}` : ""}</p>
-        ${lastTime ? `<p class="faint last-time">Last time (${fmtShort(lastTime.date)}): ${escapeHtml(lastTime.sets.map(fmtSet).join(", "))}</p>` : ""}
-        </div>
-        ${!playerArmed ? `
-          <button class="btn btn-primary btn-block btn-lg" id="playSetBtn">▶ Start Set</button>
-          <button class="btn btn-ghost btn-block" id="skipSetBtn">Skip this set</button>
-        ` : `
-          <div class="field-row">
-            <div class="field inline"><label>Weight (${state.unit})</label><input type="text" inputmode="decimal" autocomplete="off" id="playerWeightInput" value="${defaultW}" placeholder="BW"></div>
-            <div class="field inline"><label>Reps</label><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" id="playerRepsInput" value="${defaultReps}"></div>
-          </div>
-          <button class="btn btn-primary btn-block btn-lg" id="completeSetBtn">✓ Mark Set Done</button>
-        `}
-      </div>
-      <div class="player-actions">
-        <button class="link-btn${ptr.exi === 0 ? " disabled" : ""}" id="prevExBtn"${ptr.exi === 0 ? " disabled" : ""}>← Prev exercise</button>
-        <button class="link-btn${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}" id="nextExBtn"${ptr.exi === a.exercises.length - 1 ? " disabled" : ""}>Next exercise →</button>
-      </div>`;
-
-    bindGuidedHead(a);
-
-    if (!playerArmed) {
-      // Starting the next set ends whatever rest/overtime stopwatch was
-      // still running from the previous one.
-      document.getElementById("playSetBtn").addEventListener("click", () => { playerArmed = true; stopRestTimer(); renderTrain(); });
-      document.getElementById("skipSetBtn").addEventListener("click", () => {
-        set.done = true;
-        manualPtr = null;
-        saveActiveDraft();
-        renderTrain();
-      });
+  // Typing a weight/reps updates the draft without re-rendering (keeps focus).
+  function onWorkoutInput(e) {
+    const a = state.active, inp = e.target;
+    if (!a || !inp.matches(".xs-kg, .xs-reps")) return;
+    const card = inp.closest(".xcard");
+    const s = card && setAt(a, { exi: +card.getAttribute("data-exi"), si: +inp.getAttribute("data-si") });
+    if (!s) return;
+    if (inp.classList.contains("xs-kg")) {
+      const v = parseNum(inp.value);
+      s.kg = inp.value.trim() === "" || isNaN(v) ? null : toKg(v, state.unit);
     } else {
-      document.getElementById("completeSetBtn").addEventListener("click", () => {
-        const wRaw = document.getElementById("playerWeightInput").value.trim();
-        // Blank weight = bodyweight set (pull-ups, dips…).
-        const w = wRaw === "" ? 0 : parseNum(wRaw);
-        const r = Math.round(parseNum(document.getElementById("playerRepsInput").value));
-        if (isNaN(w) || w < 0) { toast("Check the weight — leave it empty for bodyweight"); return; }
-        if (isNaN(r) || r < 1) { toast("Enter how many reps you did"); return; }
-        const kg = toKg(w, state.unit);
-        set.kg = kg; set.reps = r; set.done = true;
-        manualPtr = null;
-        saveActiveDraft();
-        if (!kg) toast(`Set logged — ${r} reps`);
-        else if (prevBest && kg > prevBest) toast(`New PR — ${fmtNum(w)} ${state.unit}`);
-        else if (prevBest && kg < prevBest) toast(`Logged — your best is ${fmtNum(fromKg(prevBest, state.unit))} ${state.unit}`);
-        else toast("Set logged");
-        startRestTimer(target.rest || state.restDuration);
-        playerArmed = false;
-        renderTrain();
-      });
+      const v = parseInt(inp.value, 10);
+      s.reps = isNaN(v) ? null : v;
     }
-
-    const prevBtn = document.getElementById("prevExBtn");
-    const nextBtn = document.getElementById("nextExBtn");
-    if (prevBtn) prevBtn.addEventListener("click", () => { if (ptr.exi > 0) jumpToExercise(a, ptr.exi - 1); });
-    if (nextBtn) nextBtn.addEventListener("click", () => { if (ptr.exi < a.exercises.length - 1) jumpToExercise(a, ptr.exi + 1); });
+    saveActiveDraft();
   }
 
-  function bindGuidedHead(a) {
-    function tickElapsed() {
-      const sec = (Date.now() - a.startedAt) / 1000;
-      const el2 = document.getElementById("activeElapsed");
-      if (el2) el2.textContent = fmtElapsed(sec);
-    }
-    tickElapsed();
-    if (elapsedTimerHandle) clearInterval(elapsedTimerHandle);
-    elapsedTimerHandle = setInterval(tickElapsed, 1000);
-    document.getElementById("finishBtn").addEventListener("click", finishWorkout);
-    document.getElementById("discardBtn").addEventListener("click", () => {
-      document.getElementById("discardConfirm").innerHTML = `
-        <div class="confirm-row"><span>Discard this workout?</span><span class="spacer"></span>
-        <button class="btn btn-danger btn-sm" id="confirmDiscard">Discard</button>
-        <button class="btn btn-secondary btn-sm" id="cancelDiscard">Cancel</button></div>`;
-      document.getElementById("confirmDiscard").addEventListener("click", discardWorkout);
-      document.getElementById("cancelDiscard").addEventListener("click", () => { document.getElementById("discardConfirm").innerHTML = ""; });
-    });
-  }
-
-  // Swipe a pinned template tile right to reveal "Guided" underneath it;
-  // swipe back (or tap anywhere else on the tile) to close. Vertical
-  // scrolling is left to the browser (touch-action: pan-y in CSS).
-  const PIN_OPEN_X = 112;
-  function bindPinSwipe(wrap) {
-    const tile = wrap.querySelector(".pin-tile");
-    let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, moved = false;
-    const isOpen = () => wrap.classList.contains("open");
-    tile.addEventListener("pointerdown", (e) => {
-      startX = e.clientX; startY = e.clientY; dx = 0; dragging = true; decided = false; moved = false;
-    });
-    tile.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const mx = e.clientX - startX, my = e.clientY - startY;
-      if (!decided) {
-        if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
-        decided = true;
-        if (Math.abs(my) > Math.abs(mx)) { dragging = false; return; } // vertical scroll — let it go
-        try { tile.setPointerCapture(e.pointerId); } catch (err) {}
-        wrap.classList.add("dragging");
-      }
-      moved = true;
-      dx = Math.max(0, Math.min(PIN_OPEN_X + 20, (isOpen() ? PIN_OPEN_X : 0) + mx));
-      tile.style.transform = `translateX(${dx}px)`;
-    });
-    const end = () => {
-      if (!dragging) return;
-      dragging = false;
-      wrap.classList.remove("dragging");
-      tile.style.transform = "";
-      if (moved) wrap.classList.toggle("open", dx > PIN_OPEN_X / 2);
-    };
-    tile.addEventListener("pointerup", end);
-    tile.addEventListener("pointercancel", end);
-    // A drag shouldn't also count as tapping Start; a tap on an open tile closes it.
-    tile.addEventListener("click", (e) => {
-      if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; return; }
-      if (isOpen()) { e.stopPropagation(); e.preventDefault(); wrap.classList.remove("open"); }
-    }, true);
-  }
-
-  let elapsedTimerHandle = null;
   let mvDays = 30; // home-screen volume chart range: 30 = last 30 days, 0 = all time
   function renderTrain() {
     const el = document.getElementById("tab-train");
-    if (state.active && state.active.guided) { renderGuidedPlayer(el, state.active); return; }
     if (!state.active) {
+      el.onclick = null; el.oninput = null;
       const pinnedTpl = visibleTemplates().filter((t) => isPinnedTemplate(t.id));
       const pinnedHtml = pinnedTpl.length ? `
         <div class="section-label">Pinned templates</div>
         <div class="pin-list">
-        ${pinnedTpl.map((t) => `
-          <div class="pin-swipe" data-id="${t.id}">
-            <button class="pin-guided" data-id="${t.id}" aria-label="Start ${escapeHtml(t.name)} as a guided workout">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l14 8-14 8V4z"/></svg><span>Guided</span>
-            </button>
-            <div class="pin-tile">
-              <div class="pin-tile-main">
-                <h4>${escapeHtml(t.name)}</h4>
-                <p class="muted">${escapeHtml(t.exerciseIds.slice(0, 3).map(exName).join(", "))}${t.exerciseIds.length > 3 ? ` +${t.exerciseIds.length - 3} more` : ""}</p>
-              </div>
-              <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
+        ${pinnedTpl.map((t) => {
+          const nSets = t.exerciseIds.reduce((n, id) => n + templateSets((t.targets || {})[id], state.unit).length, 0);
+          return `
+          <div class="pin-tile">
+            <div class="pin-tile-main">
+              <h4>${escapeHtml(t.name)}</h4>
+              <p class="muted">${t.exerciseIds.length} exercise${t.exerciseIds.length === 1 ? "" : "s"} · ${nSets} sets · ${escapeHtml(t.exerciseIds.slice(0, 2).map(exName).join(", "))}${t.exerciseIds.length > 2 ? "…" : ""}</p>
             </div>
-          </div>`).join("")}
+            <button class="btn btn-primary btn-sm pin-start" data-id="${t.id}">Start</button>
+          </div>`;
+        }).join("")}
         </div>
-        <p class="pin-hint">Swipe a template right to start it guided</p>
       ` : "";
 
       const support = pushSupport();
@@ -902,13 +963,13 @@ export async function mountApp(root, user) {
       el.innerHTML = `
         <div class="card start-card">
           <h2>Ready to train?</h2>
-          <p class="muted">Start a blank session, or run one of your templates from the Exercises tab.</p>
+          <p class="muted">Start a blank session, or start one of your templates — pinned ones show up right here.</p>
           <button class="btn btn-primary btn-block" id="startEmptyBtn">Start Empty Workout</button>
         </div>
         ${pushCardHtml}
+        ${pinnedHtml}
         <div class="section-label">Muscles hit</div>
         ${muscleChartHtml({ history: state.history, exCat, fromKg, unit: state.unit, days: mvDays })}
-        ${pinnedHtml}
         <div class="section-label">Jump to</div>
         <div class="home-tiles">
           <button class="home-tile" id="homeFriendsTile">
@@ -949,150 +1010,51 @@ export async function mountApp(root, user) {
         renderTrain();
       }));
       el.querySelectorAll(".pin-start").forEach((b) => b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"))));
-      el.querySelectorAll(".pin-guided").forEach((b) => {
-        b.addEventListener("click", () => startWorkout(b.getAttribute("data-id"), true));
-        // Keyboard users can't swipe: tabbing onto the hidden action opens it.
-        b.addEventListener("focus", () => b.closest(".pin-swipe").classList.add("open"));
-        b.addEventListener("blur", () => b.closest(".pin-swipe").classList.remove("open"));
-      });
-      el.querySelectorAll(".pin-swipe").forEach(bindPinSwipe);
-      if (elapsedTimerHandle) { clearInterval(elapsedTimerHandle); elapsedTimerHandle = null; }
       return;
     }
 
     const a = state.active;
-    const exCards = a.exercises.map((ex, exi) => {
+    const n = a.exercises.length;
+    const cards = a.exercises.map((ex, exi) => {
+      const lib = byId(state.exercises, ex.exerciseId) || { name: exName(ex.exerciseId) };
       const last = lastSetsFor(ex.exerciseId);
-      const rows = ex.sets.map((s, si) => {
-        const wDisp = s.kg != null ? fmtNum(fromKg(s.kg, state.unit)) : "";
-        // Placeholders show the matching set from last time as a hint.
-        const ls = last ? last.sets[si] : null;
-        const wPh = ls ? (ls.kg ? fmtNum(fromKg(ls.kg, state.unit)) : "BW") : state.unit;
-        const rPh = ls ? String(ls.reps) : "reps";
-        return `
-          <div class="set-row" data-exi="${exi}" data-si="${si}">
-            <div class="set-num">${si + 1}</div>
-            <input type="text" inputmode="decimal" autocomplete="off" class="set-weight" placeholder="${wPh}" value="${wDisp}" aria-label="Weight (${state.unit})">
-            <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" class="set-reps" placeholder="${rPh}" value="${s.reps != null ? s.reps : ""}" aria-label="Reps">
-            <button class="set-done ${s.done ? "on" : ""}" title="Mark done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12l5 5L20 6"/></svg></button>
-            <button class="set-del" title="Delete set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-          </div>`;
-      }).join("");
-
-      return `
-        <div class="exercise-card" data-exi="${exi}">
-          <div class="exercise-card-head">
-            <div><h3>${escapeHtml(exName(ex.exerciseId))}</h3><span class="cat-tag">${escapeHtml(exCat(ex.exerciseId))}</span></div>
-            <button class="icon-btn remove-ex" title="Remove exercise" aria-label="Remove exercise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-          </div>
-          ${last ? `<button type="button" class="last-line" title="Fill in last time's sets">
-            <span>Last (${fmtShort(last.date)}): ${escapeHtml(last.sets.map(fmtSet).join(", "))}</span><span class="last-copy">Use</span>
-          </button>` : ""}
-          <div class="sets-table">
-            <div class="sets-head"><span></span><span>Weight (${state.unit})</span><span>Reps</span><span></span><span></span></div>
-            ${rows}
-          </div>
-          <button class="btn btn-ghost add-set-btn">+ Add Set</button>
-        </div>`;
+      const card = exerciseCardHtml({
+        mode: "log", index: exi, ex: lib, unit: state.unit,
+        sets: ex.sets.map((s) => ({ w: s.kg != null ? fmtNum(fromKg(s.kg, state.unit)) : "", reps: s.reps, rest: s.rest, done: s.done })),
+        placeholders: ex.sets.map((s, si) => {
+          const ls = last && last.sets[si];
+          return ls ? { w: ls.kg ? fmtNum(fromKg(ls.kg, state.unit)) : "BW", reps: String(ls.reps) } : {};
+        }),
+        current: a.current && a.current.exi === exi ? a.current.si : -1,
+        restSi: a.rest && a.rest.exi === exi ? a.rest.si : -1,
+        linkedPrev: exi > 0 && a.exercises[exi - 1].supersetNext,
+        linkedNext: ex.supersetNext && exi < n - 1
+      });
+      return card + (exi < n - 1 ? chainHtml(exi, ex.supersetNext) : "");
     }).join("");
 
     el.innerHTML = `
-      <div class="active-head">
-        <div><div class="elapsed-label">In progress</div><div class="elapsed num" id="activeElapsed">00:00</div></div>
-        <div class="head-actions">
-          <button class="icon-btn" id="discardBtn" title="Discard workout" aria-label="Discard workout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg></button>
-          <button class="btn btn-primary btn-sm" id="finishBtn">Finish</button>
-        </div>
+      <div class="w-head">
+        <div class="w-title"><div class="elapsed num" id="activeElapsed">00:00</div><div class="w-name">${escapeHtml(a.name || "Workout")}</div></div>
+        <button class="btn btn-sm w-finish" id="finishBtn">Finish</button>
+        <button class="xc-icon w-more" id="workoutMenuBtn" aria-label="Workout options">${ICONS.dots}</button>
       </div>
-      <div id="discardConfirm"></div>
-      ${exCards}
+      ${n ? `<div class="xlist">${cards}</div>` : '<div class="card"><p class="muted">No exercises yet — add your first one.</p></div>'}
       <button class="btn btn-secondary btn-block" id="addExerciseBtn">+ Add Exercise</button>
+      <div class="wbar-spacer" aria-hidden="true"></div>
     `;
-
-    function tickElapsed() {
-      const sec = (Date.now() - a.startedAt) / 1000;
-      document.getElementById("activeElapsed").textContent = fmtElapsed(sec);
-    }
-    tickElapsed();
-    if (elapsedTimerHandle) clearInterval(elapsedTimerHandle);
-    elapsedTimerHandle = setInterval(tickElapsed, 1000);
-
-    document.getElementById("finishBtn").addEventListener("click", finishWorkout);
-    document.getElementById("discardBtn").addEventListener("click", () => {
-      document.getElementById("discardConfirm").innerHTML = `
-        <div class="confirm-row"><span>Discard this workout?</span><span class="spacer"></span>
-        <button class="btn btn-danger btn-sm" id="confirmDiscard">Discard</button>
-        <button class="btn btn-secondary btn-sm" id="cancelDiscard">Cancel</button></div>`;
-      document.getElementById("confirmDiscard").addEventListener("click", discardWorkout);
-      document.getElementById("cancelDiscard").addEventListener("click", () => { document.getElementById("discardConfirm").innerHTML = ""; });
-    });
-
-    el.querySelectorAll(".remove-ex").forEach((b) => b.addEventListener("click", () => {
-      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
-      a.exercises.splice(exi, 1);
-      saveActiveDraft(); renderTrain();
-    }));
-    // Copy last time's sets into the empty rows (adding rows if needed);
-    // anything already typed is left alone.
-    el.querySelectorAll(".last-line").forEach((b) => b.addEventListener("click", () => {
-      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
-      const ex = a.exercises[exi];
-      const last = lastSetsFor(ex.exerciseId);
-      if (!last) return;
-      last.sets.forEach((ls, i) => {
-        const s = ex.sets[i];
-        if (!s) ex.sets.push({ kg: ls.kg || null, reps: ls.reps, done: false });
-        else if (s.kg == null && s.reps == null) { s.kg = ls.kg || null; s.reps = ls.reps; }
-      });
-      saveActiveDraft(); renderTrain();
-    }));
-    el.querySelectorAll(".add-set-btn").forEach((b) => b.addEventListener("click", () => {
-      const exi = parseInt(b.closest(".exercise-card").getAttribute("data-exi"), 10);
-      const sets = a.exercises[exi].sets;
-      const last = sets[sets.length - 1];
-      sets.push({ kg: last ? last.kg : null, reps: last ? last.reps : null, done: false });
-      saveActiveDraft(); renderTrain();
-    }));
-    el.querySelectorAll(".set-weight").forEach((inp) => inp.addEventListener("input", () => {
-      const row = inp.closest(".set-row");
-      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
-      const v = parseNum(inp.value);
-      a.exercises[exi].sets[si].kg = isNaN(v) ? null : toKg(v, state.unit);
-      saveActiveDraft();
-    }));
-    el.querySelectorAll(".set-reps").forEach((inp) => inp.addEventListener("input", () => {
-      const row = inp.closest(".set-row");
-      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
-      const v = parseInt(inp.value, 10);
-      a.exercises[exi].sets[si].reps = isNaN(v) ? null : v;
-      saveActiveDraft();
-    }));
-    el.querySelectorAll(".set-done").forEach((btn) => btn.addEventListener("click", () => {
-      const row = btn.closest(".set-row");
-      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
-      const s = a.exercises[exi].sets[si];
-      s.done = !s.done;
-      saveActiveDraft();
-      btn.classList.toggle("on", s.done);
-      if (s.done) startRestTimer(a.exercises[exi].restSec || state.restDuration);
-    }));
-    el.querySelectorAll(".set-del").forEach((btn) => btn.addEventListener("click", () => {
-      const row = btn.closest(".set-row");
-      const exi = parseInt(row.getAttribute("data-exi"), 10), si = parseInt(row.getAttribute("data-si"), 10);
-      a.exercises[exi].sets.splice(si, 1);
-      if (a.exercises[exi].sets.length === 0) a.exercises[exi].sets.push({ kg: null, reps: null, done: false });
-      saveActiveDraft(); renderTrain();
-    }));
-
-    document.getElementById("addExerciseBtn").addEventListener("click", openAddExerciseSheet);
+    el.onclick = onWorkoutClick;
+    el.oninput = onWorkoutInput;
+    tickWorkout();
   }
 
   function openAddExerciseSheet() {
     renderPickerSheet("Add Exercise", (exId) => {
-      state.active.exercises.push({ exerciseId: exId, sets: [{ kg: null, reps: null, done: false }] });
+      state.active.exercises.push({ exerciseId: exId, supersetNext: false, sets: prefillSetsFor(exId) });
       saveActiveDraft();
       closeSheet();
       renderTrain();
+      renderBar();
     }, { exclude: state.active.exercises.map((e) => e.exerciseId) });
   }
 
@@ -1151,8 +1113,7 @@ export async function mountApp(root, user) {
     });
   }
 
-  /* ================= REST TIMER ================= */
-  let restTickHandle = null;
+  /* ================= WORKOUT BAR (set timer + rest countdown) ================= */
   let audioCtx = null;
   function beep() {
     try {
@@ -1172,68 +1133,87 @@ export async function mountApp(root, user) {
     try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (e) {}
   }
 
-  function startRestTimer(sec) {
-    state.timer = { endsAt: Date.now() + sec * 1000, duration: sec, done: false };
-    renderRestBanner();
-  }
-  function adjustRestTimer(delta) {
-    if (!state.timer) return;
-    state.timer.endsAt += delta * 1000;
-    state.timer.duration = Math.max(1, state.timer.duration + delta);
-    renderRestBanner();
-  }
-  function stopRestTimer() {
-    state.timer = null;
-    renderRestBanner();
+  // Updates only text each tick — rebuilding the buttons 4× a second made
+  // taps get lost on phones.
+  let workoutTick = null;
+  function tickWorkout() {
+    const a = state.active;
+    if (!a) return;
+    const el = document.getElementById("activeElapsed");
+    if (el) el.textContent = fmtElapsed((Date.now() - a.startedAt) / 1000);
+    const bar = document.getElementById("workoutBar");
+    const timeEl = bar && bar.querySelector(".wb-time");
+    if (a.current) {
+      if (timeEl) timeEl.textContent = fmtClock((Date.now() - a.current.startedAt) / 1000);
+    } else if (a.rest) {
+      const remain = (a.rest.endsAt - Date.now()) / 1000;
+      const over = remain <= 0;
+      if (over && !a.rest.beeped) { a.rest.beeped = true; saveActiveDraft(); beep(); }
+      const txt = over ? `+${fmtClock(-remain)}` : fmtClock(Math.ceil(remain));
+      if (timeEl && timeEl.textContent !== txt) timeEl.textContent = txt;
+      if (bar) {
+        bar.classList.toggle("over", over);
+        const fill = bar.querySelector(".wb-progress > i");
+        if (fill) fill.style.transform = `scaleX(${over ? 1 : Math.max(0, Math.min(1, 1 - remain / a.rest.duration))})`;
+        const tag = bar.querySelector(".wb-tag");
+        if (tag) tag.textContent = over ? "Rest over" : "Rest";
+      }
+      const chip = document.querySelector(".xs-restchip.running");
+      if (chip && chip.textContent !== txt) chip.textContent = txt;
+    }
   }
 
-  // Built once per timer, then only the text and bar change each tick —
-  // re-creating the buttons 4× a second made taps get lost on phones.
-  function renderRestBanner() {
-    const el = document.getElementById("restBanner");
-    if (!el) return;
-    if (!state.timer) {
-      el.hidden = true;
-      el.innerHTML = "";
-      if (restTickHandle) { clearInterval(restTickHandle); restTickHandle = null; }
+  function renderBar() {
+    const bar = document.getElementById("workoutBar");
+    if (!bar) return;
+    const a = state.active;
+    if (!a || !a.exercises.length) {
+      bar.hidden = true; bar.innerHTML = ""; bar.className = "wbar";
+      document.body.classList.remove("has-wbar");
+      if (!a && workoutTick) { clearInterval(workoutTick); workoutTick = null; }
+      if (a && !workoutTick) workoutTick = setInterval(tickWorkout, 250);
       return;
     }
-    if (!el.querySelector(".rest-time")) {
-      el.innerHTML = `
-        <div class="rest-top"><span class="rest-label">Resting</span><span class="rest-time num">0:00</span></div>
-        <div class="rest-bar"><div></div></div>
-        <div class="rest-actions">
-          <button type="button" data-a="-15">−15s</button>
-          <button type="button" data-a="+15">+15s</button>
-          <button type="button" class="skip" data-a="skip">Skip</button>
-        </div>`;
-      el.querySelector('[data-a="-15"]').addEventListener("click", () => adjustRestTimer(-15));
-      el.querySelector('[data-a="+15"]').addEventListener("click", () => adjustRestTimer(15));
-      el.querySelector('[data-a="skip"]').addEventListener("click", stopRestTimer);
+    const nx = nextSet(a, a.rest || null);
+    const nm = (ref) => escapeHtml(exName(a.exercises[ref.exi].exerciseId));
+    let mode, label, sub, big, bigLabel;
+    if (a.current) {
+      mode = "set"; label = nm(a.current); sub = `Set ${a.current.si + 1}`; big = "check"; bigLabel = "Finish this set";
+    } else if (a.rest) {
+      mode = "rest"; label = nx ? `Next: ${nm(nx)}` : "Last set done"; sub = nx ? `Set ${nx.si + 1}` : ""; big = nx ? "play" : "check"; bigLabel = nx ? "Start the next set" : "Finish workout";
+    } else if (nx) {
+      mode = "idle"; label = `Next: ${nm(nx)}`; sub = `Set ${nx.si + 1}`; big = "play"; bigLabel = "Start the next set";
+    } else {
+      mode = "done"; label = "All sets done"; sub = "Tap ✓ to finish"; big = "check"; bigLabel = "Finish workout";
     }
-    el.hidden = false;
-    const labelEl = el.querySelector(".rest-label");
-    const timeEl = el.querySelector(".rest-time");
-    const barEl = el.querySelector(".rest-bar > div");
-    const skipEl = el.querySelector('[data-a="skip"]');
-    function tick() {
-      if (!state.timer) return;
-      const remain = (state.timer.endsAt - Date.now()) / 1000;
-      const over = remain <= 0;
-      if (over && !state.timer.done) { state.timer.done = true; beep(); }
-      el.classList.toggle("over", over);
-      const pct = over ? 1 : Math.max(0, Math.min(1, remain / state.timer.duration));
-      const label = over ? "Over rest — go again?" : "Resting";
-      const time = `${over ? "+" : ""}${fmtClock(over ? -remain : remain)}`;
-      if (labelEl.textContent !== label) labelEl.textContent = label;
-      if (timeEl.textContent !== time) timeEl.textContent = time;
-      barEl.style.transform = `scaleX(${pct})`;
-      const skip = over ? "Dismiss" : "Skip";
-      if (skipEl.textContent !== skip) skipEl.textContent = skip;
-    }
-    tick();
-    if (restTickHandle) clearInterval(restTickHandle);
-    restTickHandle = setInterval(tick, 250);
+    bar.className = `wbar ${mode}`;
+    bar.innerHTML = `
+      ${mode === "rest" ? '<div class="wb-progress" aria-hidden="true"><i></i></div>' : ""}
+      <button type="button" class="wb-info" aria-label="Go to your workout">
+        <span class="wb-label">${mode === "rest" ? '<span class="wb-tag">Rest</span>' : mode === "set" ? '<span class="wb-dot" aria-hidden="true"></span>' : ""}${label}</span>
+        <span class="wb-row"><span class="wb-time num">${mode === "idle" || mode === "done" ? "" : "00:00"}</span><span class="wb-sub">${sub}</span></span>
+      </button>
+      ${mode === "rest" ? '<div class="wb-adj"><button type="button" data-adj="-15" aria-label="15 seconds less rest">−15</button><button type="button" data-adj="15" aria-label="15 seconds more rest">+15</button></div>' : ""}
+      <button type="button" class="wb-big ${big}" aria-label="${bigLabel}">${big === "play" ? ICONS.play : ICONS.check}</button>`;
+    bar.hidden = false;
+    document.body.classList.add("has-wbar");
+    bar.querySelector(".wb-info").addEventListener("click", () => { if (currentTab !== "train") setTab("train"); else if (a.current || nx) scrollToSet((a.current || nx).exi, (a.current || nx).si); });
+    bar.querySelectorAll("[data-adj]").forEach((b) => b.addEventListener("click", () => {
+      if (!a.rest) return;
+      const d = +b.getAttribute("data-adj");
+      a.rest.endsAt = Math.max(Date.now(), a.rest.endsAt + d * 1000);
+      a.rest.duration = Math.max(1, a.rest.duration + d);
+      if (a.rest.endsAt > Date.now()) a.rest.beeped = false;
+      saveActiveDraft();
+      tickWorkout();
+    }));
+    bar.querySelector(".wb-big").addEventListener("click", () => {
+      if (mode === "set") completeSet(a.current.exi, a.current.si);
+      else if ((mode === "rest" || mode === "idle") && nx) startSet(nx.exi, nx.si, true);
+      else finishWorkout();
+    });
+    tickWorkout();
+    if (!workoutTick) workoutTick = setInterval(tickWorkout, 250);
   }
 
   /* ================= HISTORY ================= */
@@ -1392,14 +1372,13 @@ export async function mountApp(root, user) {
         <div class="tpl-top">
           <div class="info">
             <h4>${escapeHtml(t.name)}</h4>
-            <p>${escapeHtml(t.exerciseIds.map(exName).join(", ") || "No exercises yet")}</p>
+            <p>${t.exerciseIds.length ? `${t.exerciseIds.length} exercise${t.exerciseIds.length === 1 ? "" : "s"}, ${t.exerciseIds.reduce((n, id) => n + templateSets((t.targets || {})[id], state.unit).length, 0)} sets · ` : ""}${escapeHtml(t.exerciseIds.map(exName).join(", ") || "No exercises yet")}</p>
           </div>
           <button class="icon-btn sm pin-tpl ${pinned ? "pinned" : ""}" data-id="${t.id}" title="${pinned ? "Unpin" : "Pin to home screen"}" aria-label="${pinned ? "Unpin template" : "Pin template to home screen"}">${ICON.star(pinned)}</button>
           <button class="icon-btn sm share-tpl" data-id="${t.id}" title="Share with friends" aria-label="Share template with friends">${ICON.share}</button>
         </div>
         <div class="tpl-actions">
-          <button class="btn btn-primary btn-sm start-tpl2" data-id="${t.id}">Start</button>
-          <button class="btn btn-secondary btn-sm run-tpl" data-id="${t.id}">${ICON.play}Guided</button>
+          <button class="btn btn-primary btn-sm start-tpl2" data-id="${t.id}">${ICON.play}Start</button>
           <button class="icon-btn sm edit-tpl" data-id="${t.id}" title="Edit" aria-label="Edit template">${ICON.edit}</button>
           ${t.isCustom
             ? `<button class="icon-btn sm del-tpl" data-id="${t.id}" title="Delete template" aria-label="Delete template">${ICON.x}</button>`
@@ -1505,7 +1484,6 @@ export async function mountApp(root, user) {
     }));
 
     el.querySelectorAll(".start-tpl2").forEach((b) => b.addEventListener("click", async () => { if (await startWorkout(b.getAttribute("data-id"))) setTab("train"); }));
-    el.querySelectorAll(".run-tpl").forEach((b) => b.addEventListener("click", async () => { if (await startWorkout(b.getAttribute("data-id"), true)) setTab("train"); }));
     el.querySelectorAll(".edit-tpl").forEach((b) => b.addEventListener("click", () => openTemplateEditor(ctx, byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".share-tpl").forEach((b) => b.addEventListener("click", () => openShareSheet(byId(state.templates, b.getAttribute("data-id")))));
     el.querySelectorAll(".pin-tpl").forEach((b) => b.addEventListener("click", (e) => {
@@ -1597,7 +1575,7 @@ export async function mountApp(root, user) {
         t.exerciseIds.forEach((id) => { const e = byId(state.exercises, id); if (e) meta[id] = { name: e.name, cat: e.cat, custom: !!e.isCustom }; });
         // Send every target weight in this person's current unit, matching `unit`.
         const targets = {};
-        Object.entries(t.targets || {}).forEach(([id, tg]) => { targets[id] = { ...tg, weight: targetWeight(tg), unit: state.unit }; });
+        Object.entries(t.targets || {}).forEach(([id, tg]) => { targets[id] = buildTarget(templateSets(tg, state.unit), state.unit, tg.supersetNext); });
         try {
           await db.shareTemplate(user.id, [...picked], { name: t.name, exerciseIds: t.exerciseIds, targets, exerciseMeta: meta, unit: state.unit });
           closeSheet();
@@ -1647,13 +1625,12 @@ export async function mountApp(root, user) {
         state.exercises.push(created);
         idMap[exId] = created.id;
       }
-      // Weights are stored in whatever unit the sender uses; convert to yours.
-      const conv = (w) => (w == null || w === "" || sh.unit === state.unit) ? w : roundDisp(fromKg(toKg(w, sh.unit), state.unit));
+      // Weights are stored in whatever unit the sender uses; convert every set to yours.
       const ids = sh.exerciseIds.map((x) => idMap[x] || x);
       const targets = {};
       sh.exerciseIds.forEach((x) => {
         const tg = (sh.targets || {})[x];
-        if (tg) targets[idMap[x] || x] = { ...tg, weight: conv(tg.weight), unit: state.unit };
+        if (tg) targets[idMap[x] || x] = buildTarget(templateSets({ ...tg, unit: tg.unit || sh.unit }, state.unit), state.unit, tg.supersetNext);
       });
       const taken = new Set(state.templates.map((t) => t.name));
       let name = sh.name;
@@ -1702,7 +1679,7 @@ export async function mountApp(root, user) {
       </div>
       ${last ? `<p class="faint">Last time: ${escapeHtml(last.sets.map(fmtSet).join(", "))}${last.sets.some((s) => s.kg) ? ` ${state.unit}` : ""}</p>` : ""}`
       : `<p class="faint">You haven't logged this one yet.</p>`;
-    const inNormalWorkout = state.active && !state.active.guided;
+    const inNormalWorkout = !!state.active;
     const actionHtml = inNormalWorkout
       ? (state.active.exercises.some((e) => e.exerciseId === ex.id)
         ? `<button class="btn btn-secondary btn-block" disabled>Already in your workout</button>`
@@ -1728,7 +1705,7 @@ export async function mountApp(root, user) {
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     const addBtn = document.getElementById("exDetailAdd");
     if (addBtn) addBtn.addEventListener("click", () => {
-      state.active.exercises.push({ exerciseId: ex.id, sets: [{ kg: null, reps: null, done: false }] });
+      state.active.exercises.push({ exerciseId: ex.id, supersetNext: false, sets: prefillSetsFor(ex.id) });
       saveActiveDraft();
       closeSheet();
       setTab("train");
@@ -1736,7 +1713,7 @@ export async function mountApp(root, user) {
     });
     const startBtn = document.getElementById("exDetailStart");
     if (startBtn) startBtn.addEventListener("click", async () => {
-      if (await startWorkout(null, false, ex.id)) { closeSheet(); setTab("train"); }
+      if (await startWorkout(null, ex.id)) { closeSheet(); setTab("train"); }
     });
     if (hasImgs) {
       const a = document.getElementById("exDemoA");
@@ -1809,8 +1786,11 @@ export async function mountApp(root, user) {
     u.searchParams.delete("tab");
     history.replaceState(null, "", u.pathname + (u.searchParams.toString() ? "?" + u.searchParams : "") + u.hash);
   }
+  // Drafts saved by an older version of the workout screen are converted.
+  state.active = normalizeActive(state.active);
+  saveActiveDraft();
   setTab(startTab || "train");
-  renderRestBanner();
+  renderBar();
   mountNotifications(ctx);
   try { db.saveTimezone(user.id, Intl.DateTimeFormat().resolvedOptions().timeZone).catch(() => {}); } catch (e) {}
   syncPushSubscription();
