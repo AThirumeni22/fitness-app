@@ -107,9 +107,9 @@ export async function renderCalendar(ctx) {
     document.getElementById("nextMonthBtn").addEventListener("click", () => { viewMonth = new Date(year, month + 1, 1); renderCalendar(ctx); });
     el.querySelectorAll(".cal-cell[data-key]").forEach((b) => {
       const key = b.getAttribute("data-key");
-      b.addEventListener("click", () => openDaySheet(ctx, key, workoutsByDay[key] || [], postsByDay[key] || [], nameById, (post) => {
-        // New photo/video: show its camera dot on the grid straight away.
-        (postsByDay[key] = postsByDay[key] || []).unshift(post);
+      b.addEventListener("click", () => openDaySheet(ctx, key, workoutsByDay[key] || [], postsByDay[key] || [], nameById, (posts) => {
+        // Added/deleted photo or video: update that day's camera dot right away.
+        postsByDay[key] = posts.slice();
         draw();
       }));
     });
@@ -439,7 +439,8 @@ function prettyDate(dateKey) {
 // Full-screen, in-app photo/video viewer — tap a tile to open, swipe or use
 // the arrows to move between that day's media, tap outside / X / Esc to
 // close. Nothing is downloaded or saved to the phone's photo library.
-function openLightbox(ctx, items, startIndex) {
+// Your own photos/videos get a Delete button; onDelete(item) does the work.
+function openLightbox(ctx, items, startIndex, onDelete) {
   let i = startIndex;
   const box = document.createElement("div");
   box.className = "lightbox";
@@ -459,6 +460,7 @@ function openLightbox(ctx, items, startIndex) {
     draw();
   }
   function onKey(e) {
+    if (!document.getElementById("dialog").hidden) return; // the "Delete?" prompt has the keyboard
     if (e.key === "Escape") close();
     else if (e.key === "ArrowRight") go(1);
     else if (e.key === "ArrowLeft") go(-1);
@@ -472,7 +474,10 @@ function openLightbox(ctx, items, startIndex) {
           ? `<video src="${it.mediaUrl}" controls autoplay playsinline></video>`
           : `<img src="${it.mediaUrl}" alt="Photo from ${ctx.escapeHtml(it.who)}">`}
       </div>
-      <div class="lb-caption">${ctx.escapeHtml(it.who)}${items.length > 1 ? ` · ${i + 1} / ${items.length}` : ""}</div>
+      <div class="lb-caption">
+        <span>${ctx.escapeHtml(it.who)}${items.length > 1 ? ` · ${i + 1} / ${items.length}` : ""}</span>
+        ${onDelete && it.userId === ctx.user.id ? `<button class="lb-del" aria-label="Delete this ${it.mediaType === "video" ? "video" : "photo"}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14"/></svg>Delete</button>` : ""}
+      </div>
       ${items.length > 1 ? `
         <button class="lb-nav lb-prev" aria-label="Previous"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg></button>
         <button class="lb-nav lb-next" aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>` : ""}
@@ -481,6 +486,31 @@ function openLightbox(ctx, items, startIndex) {
     const prev = box.querySelector(".lb-prev"), next = box.querySelector(".lb-next");
     if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); go(-1); });
     if (next) next.addEventListener("click", (e) => { e.stopPropagation(); go(1); });
+    const del = box.querySelector(".lb-del");
+    if (del) del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const kind = it.mediaType === "video" ? "video" : "photo";
+      const ok = await ctx.confirm({
+        title: `Delete this ${kind}?`,
+        message: `It's removed for you and your friends. This can't be undone.`,
+        confirmText: `Delete ${kind}`,
+        cancelText: "Keep it",
+        danger: true
+      });
+      if (!ok) return;
+      del.disabled = true; del.lastChild.textContent = "Deleting…";
+      try {
+        await onDelete(it);
+        items.splice(i, 1);
+        ctx.toast(`${kind[0].toUpperCase() + kind.slice(1)} deleted`);
+        if (!items.length) { close(); return; }
+        i = Math.min(i, items.length - 1);
+        draw();
+      } catch (err) {
+        ctx.toast("Couldn't delete that: " + (err.message || String(err)));
+        del.disabled = false; del.lastChild.textContent = "Delete";
+      }
+    });
   }
 
   // Tap the dark backdrop to close; horizontal swipe to change photo.
@@ -500,7 +530,8 @@ function openLightbox(ctx, items, startIndex) {
 // Supabase Storage's default per-file limit on the free plan.
 const MAX_UPLOAD_MB = 50;
 
-function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById, onPosted) {
+// onPostsChanged(posts) tells the calendar grid the day's media changed.
+function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById, onPostsChanged) {
   const { openSheet, closeSheet, toast, escapeHtml } = ctx;
   const unit = ctx.state.unit;
 
@@ -560,13 +591,20 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById, onPoste
         ${mediaHtml}
         <input type="file" id="dayMediaInput" accept="image/*,video/*" hidden>
         <button class="btn btn-secondary btn-block" id="addMediaBtn">+ Add a photo or video</button>
-        <p class="faint">Only you and your friends can see photos and videos posted here.</p>
+        <p class="faint">Only you and your friends can see photos and videos posted here. Tap one of yours to view or delete it.</p>
       </div>
       </div>
     `);
     document.getElementById("sheetClose").addEventListener("click", closeSheet);
     const lbItems = posts.map((p) => ({ ...p, who: nameById[p.userId] || "Someone" }));
-    document.querySelectorAll(".media-tile[data-idx]").forEach((t) => t.addEventListener("click", () => openLightbox(ctx, lbItems, parseInt(t.getAttribute("data-idx"), 10))));
+    let current = posts;
+    const onDelete = async (item) => {
+      await ctx.db.deleteDayPost(item.id, item.mediaUrl);
+      current = current.filter((p) => p.id !== item.id);
+      draw(current);
+      if (onPostsChanged) onPostsChanged(current);
+    };
+    document.querySelectorAll(".media-tile[data-idx]").forEach((t) => t.addEventListener("click", () => openLightbox(ctx, lbItems, parseInt(t.getAttribute("data-idx"), 10), onDelete)));
     document.getElementById("addMediaBtn").addEventListener("click", () => document.getElementById("dayMediaInput").click());
     document.getElementById("dayMediaInput").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
@@ -583,7 +621,7 @@ function openDaySheet(ctx, dateKey, dayWorkouts, initialPosts, nameById, onPoste
         const post = await ctx.db.addDayPost(ctx.user.id, dateKey, url, type, "");
         const next = [post, ...posts];
         draw(next);
-        if (onPosted) onPosted(post);
+        if (onPostsChanged) onPostsChanged(next);
         toast("Added");
       } catch (err) {
         toast("Couldn't upload: " + (err.message || String(err)));

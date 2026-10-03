@@ -676,7 +676,10 @@ details.cat-group[open] summary{border-bottom:1px solid var(--border);}
 .lightbox{position:fixed; inset:0; z-index:80; background:rgba(4,5,8,.96); display:flex; flex-direction:column; align-items:center; justify-content:center; animation:fadeIn .18s var(--ease) both; touch-action:pinch-zoom; overscroll-behavior:contain;}
 .lb-stage{flex:1; width:100%; display:flex; align-items:center; justify-content:center; padding:calc(56px + var(--safe-t)) var(--s3) var(--s3); min-height:0;}
 .lb-stage img, .lb-stage video{width:100%; height:100%; object-fit:contain;}
-.lb-caption{padding:var(--s3) var(--s4) calc(var(--s5) + var(--safe-b)); font-size:14px; color:var(--ink-dim);}
+.lb-caption{padding:var(--s3) var(--s4) calc(var(--s5) + var(--safe-b)); font-size:14px; color:var(--ink-dim); display:flex; align-items:center; justify-content:center; gap:var(--s4); flex-wrap:wrap;}
+.lb-del{display:inline-flex; align-items:center; gap:var(--s2); min-height:44px; padding:0 var(--s4); border-radius:999px; border:1px solid rgba(251,113,133,.45); background:rgba(251,113,133,.12); color:var(--crit); font:inherit; font-weight:600; cursor:pointer;}
+.lb-del svg{width:16px; height:16px;}
+.lb-del:disabled{opacity:.6;}
 .lb-close, .lb-nav{width:44px; height:44px; border-radius:50%; border:1px solid var(--border-strong); background:rgba(0,0,0,.45); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer;}
 .lb-close{position:absolute; top:calc(var(--s3) + var(--safe-t)); right:var(--s3); z-index:2;}
 .lb-nav{position:absolute; top:50%; transform:translateY(-50%);}
@@ -930,7 +933,7 @@ details.cat-group[open] summary{border-bottom:1px solid var(--border);}
 
 /* ---------- confirm dialog ---------- */
 .dialog{
-  position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+  position:fixed; inset:0; z-index:90; /* above sheets (40) and the photo viewer (80) */ display:flex; align-items:center; justify-content:center;
   padding:var(--gutter); background:rgba(3,4,6,.72); animation:fadeIn .18s var(--ease) both;
 }
 .dialog-card{

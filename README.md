@@ -49,7 +49,8 @@ no server to run yourself.
 2g. Run a seventh query with the contents of
    [`supabase/migration_7_workout_delete.sql`](./supabase/migration_7_workout_delete.sql).
    It lets people delete their own workouts from History (e.g. one logged
-   by mistake) — run it once, after migration_6_notifications.sql.
+   by mistake) and fully remove their own calendar photos/videos — run it
+   once, after migration_6_notifications.sql.
 3. Open **Project Settings -> API**. You'll need two values from this page
    in a minute: the **Project URL** and the **anon public** key.
 4. Optional, but recommended for onboarding friends quickly: under
@@ -229,6 +230,8 @@ check the phone's notification settings for Obonto, and look at
   current workout (or start one with it).
 - **Delete a workout** — open it in History and tap "Delete workout"
   (needs migration_7).
+- **Delete a photo/video** — tap one of your own on a calendar day, then
+  Delete. Friends' posts can't be deleted by you.
 - **Per-exercise rest timer** — each exercise in a template can have its
   own rest duration (set in the template editor); exercises without one
   fall back to the default rest timer from your Profile settings. When
@@ -299,7 +302,7 @@ supabase/
   migration_4_template_prefs.sql Adds pinned/hidden template preferences per profile
   migration_5_onboarding_sharing.sql Privacy consent columns + template_shares table
   migration_6_notifications.sql Notifications, push subscriptions, "can't make it", reminders
-  migration_7_workout_delete.sql Lets people delete their own workouts
+  migration_7_workout_delete.sql Lets people delete their own workouts and photo/video files
   functions/send-push/index.ts  Edge Function that delivers push notifications
 ```
 

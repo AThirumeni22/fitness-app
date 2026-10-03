@@ -277,9 +277,18 @@ export async function addDayPost(userId, dateStr, mediaUrl, mediaType, caption) 
   return { id: data.id, userId: data.user_id, date: data.post_date, mediaUrl: data.media_url, mediaType: data.media_type, caption: data.caption };
 }
 
-export async function deleteDayPost(id) {
-  const { error } = await supabase.from("day_posts").delete().eq("id", id);
+// Removes the post, then (best effort) its file from storage. The file's
+// path is the part of the public URL after "/day-media/".
+export async function deleteDayPost(id, mediaUrl) {
+  const { data, error } = await supabase.from("day_posts").delete().eq("id", id).select("id");
   if (error) throw error;
+  if (!data || !data.length) throw new Error("Couldn't delete that post");
+  const marker = "/day-media/";
+  const at = mediaUrl ? mediaUrl.indexOf(marker) : -1;
+  if (at > -1) {
+    const path = decodeURIComponent(mediaUrl.slice(at + marker.length).split("?")[0]);
+    try { await supabase.storage.from("day-media").remove([path]); } catch (e) {}
+  }
 }
 
 export async function listDayPosts(userIds, startDate, endDate) {
